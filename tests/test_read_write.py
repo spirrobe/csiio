@@ -39,7 +39,7 @@ def _normalized_reference_stem(stem):
     prefixes = ["TOA5_", "TOB1_", "TOB3_", "CSIXML_"]
     for prefix in prefixes:
         if stem.upper().startswith(prefix):
-            return stem[len(prefix):]
+            return stem[len(prefix) :]
     return stem
 
 
@@ -163,7 +163,9 @@ class TestCampbellScientificIO(unittest.TestCase):
 
         self.assertEqual(len(loaded), len(self.df))
         self.assertTrue(isinstance(loaded.index, pd.DatetimeIndex))
-        self.assertEqual(list(loaded.columns), ["RECORD (RN)", "air_temp (degC)", "co2_flux (umol m-2 s-1)"])
+        self.assertEqual(
+            list(loaded.columns), ["RECORD (RN)", "air_temp (degC)", "co2_flux (umol m-2 s-1)"]
+        )
 
     def test_convert_to_tob3_and_read(self):
         src = self.tmpdir / "source.dat"
@@ -240,7 +242,9 @@ class TestCampbellScientificIO(unittest.TestCase):
         for raw_file in raw_files:
             with self.subTest(raw_file=str(raw_file)):
                 outfile_hint = self.tmpdir / f"{raw_file.stem}_toa5.dat"
-                converted = Path(convert_csi_file(str(raw_file), str(outfile_hint), "TOA5", quiet=True))
+                converted = Path(
+                    convert_csi_file(str(raw_file), str(outfile_hint), "TOA5", quiet=True)
+                )
                 self.assertTrue(converted.exists())
 
                 converted_df, _ = read_csi_files(
@@ -255,7 +259,9 @@ class TestCampbellScientificIO(unittest.TestCase):
     def test_cardconvert_parity_when_references_present(self):
         reference_csvs = _iter_cardconvert_csv_files()
         if not reference_csvs:
-            self.skipTest("No CardConvert reference files (.csv/.dat) found under tests/fixtures/cardconvert")
+            self.skipTest(
+                "No CardConvert reference files (.csv/.dat) found under tests/fixtures/cardconvert"
+            )
 
         raw_files = _iter_raw_fixture_files()
         matched = 0
@@ -300,13 +306,15 @@ class TestCampbellScientificIO(unittest.TestCase):
 
     def test_converted_outputs_match_cardconvert_references(self):
         from collections import defaultdict
-        
+
         reference_files = _iter_cardconvert_csv_files()
         if not reference_files:
-            self.skipTest("No CardConvert reference files (.csv/.dat) found under tests/fixtures/cardconvert")
+            self.skipTest(
+                "No CardConvert reference files (.csv/.dat) found under tests/fixtures/cardconvert"
+            )
 
         raw_files = _iter_raw_fixture_files()
-        
+
         # Group reference files by (matching raw file, output format) then sample splits.
         # This keeps first + last from each daily-split window to test edge cases
         # without testing every intermediate day (e.g., 20+ daily splits from one raw file).
@@ -316,7 +324,7 @@ class TestCampbellScientificIO(unittest.TestCase):
             output_format = _reference_output_format(ref_file)
             if raw_file and output_format:
                 groups[(raw_file, output_format)].append(ref_file)
-        
+
         sampled_files = []
         for group_files in groups.values():
             group_files = sorted(group_files)
@@ -326,7 +334,7 @@ class TestCampbellScientificIO(unittest.TestCase):
                 # Keep first and last from split windows (e.g., first day and last day)
                 sampled_files.append(group_files[0])
                 sampled_files.append(group_files[-1])
-        
+
         reference_files = sorted(set(sampled_files))
         matched = 0
 
@@ -338,7 +346,9 @@ class TestCampbellScientificIO(unittest.TestCase):
 
             with self.subTest(pair=f"{raw_file.name} -> {output_format} vs {expected_file.name}"):
                 outfile_hint = self.tmpdir / f"{raw_file.stem}_{output_format.lower()}.dat"
-                converted = Path(convert_csi_file(str(raw_file), str(outfile_hint), output_format, quiet=True))
+                converted = Path(
+                    convert_csi_file(str(raw_file), str(outfile_hint), output_format, quiet=True)
+                )
 
                 got_df, _ = read_csi_files(
                     str(converted),

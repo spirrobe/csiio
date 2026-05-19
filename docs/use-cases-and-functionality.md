@@ -9,7 +9,7 @@ csiio is designed to work with the common Campbell Scientific formats:
 - TOA5 (ASCII file with 4 header lines)
 - TOACI1 (TOA5 with short header, usually handled by the same functionality as TOA5)
 - TOB1 (binary file with 4 header lines where each record is one line)
-- TOB3 (binary file with 4 header lines with record frames to ensure integrity; this is the native format of CSI loggers) 
+- TOB3 (binary file with 4 header lines with record frames to ensure integrity; this is the native format of CSI loggers)
 - CSIXML (XML-based format)
 
 ## Main Use Cases

@@ -5,9 +5,9 @@ import csv
 import math
 import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 
@@ -194,7 +194,16 @@ def _audit_pair(
     else:
         reason = "text_distribution_shift_within_tolerance"
 
-    return reason, overlap_rows, len(shared_columns), exact_ratio, max_abs_diff, text_delta_ratio_max, strict_status, tolerance_status
+    return (
+        reason,
+        overlap_rows,
+        len(shared_columns),
+        exact_ratio,
+        max_abs_diff,
+        text_delta_ratio_max,
+        strict_status,
+        tolerance_status,
+    )
 
 
 def generate_reports(reports_dir: Path = REPORTS_DIR) -> tuple[Path, Path]:
