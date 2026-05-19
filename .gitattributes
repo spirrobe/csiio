@@ -1,2 +1,1 @@
-tests/fixtures/**/* filter=lfs diff=lfs merge=lfs -text
-*.dat
+*.dat filter=lfs diff=lfs merge=lfs -text
