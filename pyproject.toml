@@ -3,12 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "csiio"
+name = "csiio-py"
 version = "0.1.0"
 description = "Reader, converter, and CSV tooling for Campbell Scientific data files"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "Robert Spirig", email = "spirrobe@gmail.com" }
 ]
@@ -19,7 +19,6 @@ keywords = ["campbell scientific", "TOA5", "TOB1", "TOB3", "CSIXML", "timeseries
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -70,7 +69,7 @@ python_functions = "test_*"
 # Code formatting
 [tool.black]
 line-length = 100
-target-version = ["py39", "py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -89,7 +88,7 @@ extend-exclude = '''
 # Linting
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 select = [
   "E", "F", "W",  # pycodestyle, Pyflakes, warnings
   "I",            # isort
