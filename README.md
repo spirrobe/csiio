@@ -4,7 +4,7 @@ Python reader and converter for Campbell Scientific Inc data files.
 
 This package focuses on practical ingestion and conversion workflows for CSI formats (including TOA5, TOACI1, TOB1, TOB3, and CSIXML), with DataFrame-native handling for downstream analysis pipelines.
 
-Citation: If you use csiio in published work, see the citation guidance in [How To Cite](README.md#how-to-cite).
+Citation: If you use csiio in published work and want to cite it, see the citation guidance in [How To Cite](README.md#how-to-cite).
 
 ## Install
 
@@ -77,7 +77,7 @@ Suggested BibTeX entry:
 }
 ```
 
-Ifr relevant/available for your workflow, include a commit hash or release tag for exact reproducibility.
+If relevant/available for your workflow, include a commit hash or release tag for exact reproducibility.
 
 ## Conversion Audit Reports
 
