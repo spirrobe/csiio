@@ -8,18 +8,45 @@ version = "0.1.0"
 description = "Reader, converter, and CSV tooling for Campbell Scientific data files"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "MIT"
+license = { text = "MIT" }
 authors = [
-  { name = "csiio contributors" }
+  { name = "Robert Spirig", email = "spirrobe@gmail.com" }
 ]
 dependencies = [
   "pandas>=1.5"
 ]
 keywords = ["campbell scientific", "TOA5", "TOB1", "TOB3", "CSIXML", "timeseries"]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3 :: Only",
-  "Operating System :: OS Independent"
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/spirrobe/csiio"
+Repository = "https://github.com/spirrobe/csiio.git"
+Issues = "https://github.com/spirrobe/csiio/issues"
+Documentation = "https://github.com/spirrobe/csiio#documentation"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "ruff>=0.1",
+  "black>=23.0",
+  "mypy>=1.0",
+  "build>=1.0",
+  "twine>=4.0",
+  "sphinx>=7.0",
+  "sphinx-rtd-theme>=1.3",
 ]
 
 [project.scripts]
@@ -31,3 +58,69 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["csiio*"]
+
+# Testing configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=csiio --cov-report=term-missing --cov-report=html"
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+# Code formatting
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# Linting
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = [
+  "E", "F", "W",  # pycodestyle, Pyflakes, warnings
+  "I",            # isort
+  "N",            # pep8-naming
+  "UP",           # pyupgrade
+  "B",            # flake8-bugbear
+]
+ignore = [
+  "E501",  # line too long (handled by black)
+]
+exclude = [
+  ".git",
+  ".venv",
+  "build",
+  "dist",
+  "tests/fixtures",
+]
+
+[tool.ruff.isort]
+known-first-party = ["csiio"]
+
+# Type checking
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+exclude = ["tests/fixtures/"]

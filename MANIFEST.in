@@ -1,1 +1,6 @@
+include README.md
+include LICENSE
+include MANIFEST.in
+include .gitattributes
+recursive-include docs *
 prune tests
