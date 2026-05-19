@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csiio"
+version = "0.1.0"
+description = "Reader, converter, and CSV tooling for Campbell Scientific data files"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [
+  { name = "csiio contributors" }
+]
+dependencies = [
+  "pandas>=1.5"
+]
+keywords = ["campbell scientific", "TOA5", "TOB1", "TOB3", "CSIXML", "timeseries"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Operating System :: OS Independent"
+]
+
+[project.scripts]
+csiio = "csiio.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["csiio*"]
