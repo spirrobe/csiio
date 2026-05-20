@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### CI/Build
+- Added a GitHub Actions test workflow running pytest on push/pull_request across Python 3.10, 3.11, 3.12, 3.13, and 3.14.
+
+## [0.2.0]
+
 ### Added
 - Metadata-aware writer defaults now use normalized metadata while keeping explicit keyword arguments as overrides.
 - Conversion supports split-window output across writer formats.

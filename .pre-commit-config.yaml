@@ -20,3 +20,14 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']
+
+# Local hook to enforce CHANGELOG update
+  - repo: local
+    hooks:
+      - id: changelog-check
+        name: Ensure CHANGELOG.md is updated
+        entry: bash scripts/check_changelog_staged.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
