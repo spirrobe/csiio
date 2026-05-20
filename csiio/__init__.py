@@ -3,7 +3,6 @@
 from .read_csi_files import (
     CSIDataFile,
     convert_csi_file,
-    convert_csi_files,
     read_csi_csixml,
     read_csi_files,
     read_csi_meta,
@@ -25,7 +24,6 @@ __all__ = [
     "read_csi_tob3",
     "read_csi_csixml",
     "convert_csi_file",
-    "convert_csi_files",
     "write_csi_toa5",
     "write_csi_tob1",
     "write_csi_tob3",

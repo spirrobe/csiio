@@ -25,7 +25,12 @@ def build_parser():
     p_read.add_argument(
         "input", nargs="+", help="One or more input files (space or comma separated)."
     )
-    p_read.add_argument("--metaonly", action="store_true", help="Read metadata only.")
+    p_read.add_argument(
+        "--meta-only",
+        dest="meta_only",
+        action="store_true",
+        help="Read metadata only.",
+    )
     p_read.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
     p_read.add_argument("--no-sortindex", action="store_true", help="Do not sort DataFrame index.")
     p_read.add_argument(
@@ -41,6 +46,9 @@ def build_parser():
         help="Target output format.",
     )
     p_convert.add_argument("--output", required=True, help="Output file path.")
+    p_convert.add_argument(
+        "--split-window", default=None, help="Timedelta-like split window, e.g. 1H, 1D, 30min."
+    )
     p_convert.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
 
     p_csv = sub.add_parser(
@@ -63,12 +71,14 @@ def _cmd_read(args):
     paths = _comma_or_repeatable_paths(args.input)
     reader = CSIDataFile(paths if len(paths) > 1 else paths[0])
 
-    if args.metaonly and args.as_csv:
-        raise ValueError("--as-csv cannot be used together with --metaonly.")
+    if args.meta_only and args.as_csv:
+        raise ValueError("--as-csv cannot be used together with --meta-only.")
 
-    result = reader.read(metaonly=args.metaonly, quiet=args.quiet, sortindex=not args.no_sortindex)
+    result = reader.read(
+        meta_only=args.meta_only, quiet=args.quiet, sortindex=not args.no_sortindex
+    )
 
-    if args.metaonly:
+    if args.meta_only:
         if isinstance(result, list):
             print(f"metadata files: {len(result)}")
         else:
@@ -87,8 +97,18 @@ def _cmd_read(args):
 
 
 def _cmd_convert(args):
-    output = convert_csi_file(args.input, args.output, args.output_format, quiet=args.quiet)
-    print(output)
+    output = convert_csi_file(
+        args.input,
+        args.output,
+        args.output_format,
+        quiet=args.quiet,
+        split_window=args.split_window,
+    )
+    if isinstance(output, list):
+        for out in output:
+            print(out)
+    else:
+        print(output)
     return 0
 
 

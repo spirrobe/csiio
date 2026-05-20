@@ -21,6 +21,16 @@ BASEDATE = datetime.datetime(
     microsecond=0,
 )
 
+_DEFAULT_HEADER_VALUES = (
+    "TOA5",
+    "converted",
+    "converted",
+    "converted",
+    "converted",
+    "converted",
+    "converted",
+)
+
 
 def _emit(message, level="info", quiet=False):
     log_func = getattr(LOGGER, level, LOGGER.info)
@@ -132,7 +142,7 @@ def _data_to_dataframe(data, meta, filetype, sortindex=True):
 
     record_col = meta[name_row].index("RECORD")
     if len(meta) > unit_row:
-        cols = [i + f" ({j})" for i, j in zip(meta[name_row], meta[unit_row])]
+        cols = [i + f" ({j})" for i, j in zip(meta[name_row], meta[unit_row], strict=False)]
     else:
         cols = list(meta[name_row])
 
@@ -143,7 +153,7 @@ def _data_to_dataframe(data, meta, filetype, sortindex=True):
             f"Metadata/data column mismatch: expected {len(cols)} columns, got {len(data)}"
         )
 
-    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data)})
+    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data, strict=False)})
     dataframe = dataframe.set_index(dataframe.columns[0])
     dataframe.index.name = "TIMESTAMP"
     if sortindex:
@@ -158,7 +168,91 @@ def _data_to_dataframe(data, meta, filetype, sortindex=True):
     return dataframe
 
 
-def _read_csi_files_impl(filename, metaonly=False, quiet=True, sortindex=True, **kwargs):
+def _meta_rows_to_dict(meta_rows):
+    filetype = meta_rows[0][0] if meta_rows and meta_rows[0] else "unknown"
+    name_row = 2 if filetype == "TOB3" else 1
+    unit_row = name_row + 1
+    process_row = unit_row + 1
+    type_row = process_row + 1
+
+    names = list(meta_rows[name_row]) if len(meta_rows) > name_row else []
+    units = list(meta_rows[unit_row]) if len(meta_rows) > unit_row else []
+    process = list(meta_rows[process_row]) if len(meta_rows) > process_row else []
+    types = list(meta_rows[type_row]) if len(meta_rows) > type_row else []
+
+    fields = []
+    for idx, name in enumerate(names):
+        fields.append(
+            {
+                "name": name,
+                "unit": units[idx] if idx < len(units) else "",
+                "process": process[idx] if idx < len(process) else "",
+                "type": types[idx] if idx < len(types) else "",
+            }
+        )
+
+    return {
+        "filetype": filetype,
+        "header": list(meta_rows[0]) if meta_rows else [],
+        "fields": fields,
+    }
+
+
+def _normalized_meta_from_file_meta(file_meta):
+    if not file_meta:
+        return [
+            ["TOA5", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"],
+            ["TIMESTAMP", "RECORD"],
+            ["TS", "RN"],
+            ["", ""],
+        ]
+
+    ordered_fields = []
+    for meta_dict in file_meta.values():
+        ordered_fields.extend(meta_dict.get("fields", []))
+
+    merged_fields = {}
+    for field in ordered_fields:
+        merged_fields.setdefault(field.get("name", ""), field)
+
+    first_meta = next(iter(file_meta.values()))
+
+    names = ["TIMESTAMP", "RECORD"]
+    units = [
+        merged_fields.get("TIMESTAMP", {}).get("unit", "TS"),
+        merged_fields.get("RECORD", {}).get("unit", "RN"),
+    ]
+    process = [
+        merged_fields.get("TIMESTAMP", {}).get("process", ""),
+        merged_fields.get("RECORD", {}).get("process", ""),
+    ]
+
+    for field in ordered_fields:
+        name = field.get("name", "")
+        if not name or name in {"TIMESTAMP", "RECORD"}:
+            continue
+        if name in names:
+            continue
+        names.append(name)
+        units.append(field.get("unit", ""))
+        process.append(field.get("process", ""))
+
+    header = list(
+        first_meta.get(
+            "header", ["TOA5", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"]
+        )
+    )
+    return [
+        header,
+        names,
+        units,
+        process,
+    ]
+
+
+def _read_csi_files_impl(
+    filename, meta_only=False, quiet=True, sortindex=True, collect_file_meta=False, **kwargs
+):
     # Backward compatibility: ignore legacy non-DataFrame flags.
     requested_as_dataframe = kwargs.pop("asdataframe", True)
     if requested_as_dataframe is False and not quiet:
@@ -169,14 +263,35 @@ def _read_csi_files_impl(filename, metaonly=False, quiet=True, sortindex=True, *
     if isinstance(filename, list):
         results = [
             _read_csi_files_impl(
-                file, metaonly=metaonly, quiet=quiet, sortindex=sortindex, **kwargs
+                file,
+                meta_only=meta_only,
+                quiet=quiet,
+                sortindex=sortindex,
+                collect_file_meta=collect_file_meta,
+                **kwargs,
             )
             for file in filename
         ]
-        if metaonly:
+        if meta_only:
+            if collect_file_meta:
+                metas, file_meta = zip(*results, strict=False)
+                merged_file_meta = {}
+                for item in file_meta:
+                    merged_file_meta.update(item)
+                return list(metas), merged_file_meta
             return results
 
-        dataframes, meta = zip(*results)
+        if collect_file_meta:
+            dataframes, meta, file_meta = zip(*results, strict=False)
+            merged_file_meta = {}
+            for item in file_meta:
+                merged_file_meta.update(item)
+            dataframe = pd.concat(dataframes)
+            if sortindex:
+                dataframe = dataframe.sort_index()
+            return dataframe, list(meta), merged_file_meta
+
+        dataframes, meta = zip(*results, strict=False)
         dataframe = pd.concat(dataframes)
         if sortindex:
             dataframe = dataframe.sort_index()
@@ -218,8 +333,12 @@ def _read_csi_files_impl(filename, metaonly=False, quiet=True, sortindex=True, *
             _emit("reading header and determination of filetype", quiet=quiet)
 
         meta = read_csi_meta(file_obj, filetype)
+        raw_meta = [list(row) for row in meta]
+        per_file_meta = {filename: _meta_rows_to_dict(raw_meta)}
 
-        if metaonly:
+        if meta_only:
+            if collect_file_meta:
+                return meta, per_file_meta
             return meta
 
         if not quiet:
@@ -250,6 +369,8 @@ def _read_csi_files_impl(filename, metaonly=False, quiet=True, sortindex=True, *
 
             elif filetype == "CSIXML":
                 data = read_csi_csixml(file_obj, meta, **kwargs)
+            if collect_file_meta:
+                return data, meta, per_file_meta
             return data, meta
 
         else:
@@ -281,16 +402,21 @@ class CSIDataFile:
     paths: Any = None
     data: Any = None
     meta: Any = None
+    file_meta: Any = None
 
     def __post_init__(self):
+        if self.file_meta is None:
+            self.file_meta = {}
+
         # Handle data parameter (DataFrame initialization)
         if isinstance(self.data, pd.DataFrame):
             self.data = self._normalize_dataframe(self.data)
             self.meta = self._meta_from_dataframe(self.data)
+            self.file_meta = {}
             # Paths are optional when data is provided
             if self.paths is None:
                 self.paths = []
-            elif isinstance(self.paths, (list, tuple)):
+            elif isinstance(self.paths, list | tuple):
                 self.paths = [str(p).strip() for p in self.paths]
             else:
                 self.paths = [str(self.paths).strip()]
@@ -300,7 +426,7 @@ class CSIDataFile:
         if self.paths is None:
             self.paths = []
             return
-        if isinstance(self.paths, (list, tuple)):
+        if isinstance(self.paths, list | tuple):
             self.paths = [str(p).strip() for p in self.paths]
         else:
             self.paths = [str(self.paths).strip()]
@@ -313,6 +439,7 @@ class CSIDataFile:
         if not isinstance(result.index, pd.DatetimeIndex):
             result.index = pd.to_datetime(result.index)
         result.index.name = "TIMESTAMP"
+        result = result.sort_index()
 
         # Ensure RECORD column exists
         if "RECORD (RN)" not in result.columns:
@@ -355,7 +482,7 @@ class CSIDataFile:
 
         return combined
 
-    def read(self, metaonly=False, quiet=True, sortindex=True, **kwargs):
+    def read(self, meta_only=False, quiet=True, sortindex=True, **kwargs):
         # If data already exists and no paths provided, return stored data
         if not self.paths and self.data is not None:
             return self.data
@@ -364,19 +491,24 @@ class CSIDataFile:
         if self.data is not None and self.paths:
             input_path = self.paths if len(self.paths) > 1 else self.paths[0]
             result = _read_csi_files_impl(
-                input_path, metaonly=metaonly, quiet=quiet, sortindex=sortindex, **kwargs
+                input_path,
+                meta_only=meta_only,
+                quiet=quiet,
+                sortindex=sortindex,
+                collect_file_meta=True,
+                **kwargs,
             )
-            if metaonly:
-                # For metaonly with existing data, just return the new metadata
-                self.meta = result if isinstance(result, list) else [result]
+            if meta_only:
+                normalized_meta, new_file_meta = result
+                self.file_meta.update(new_file_meta)
+                self.meta = _normalized_meta_from_file_meta(self.file_meta)
                 return self.meta
 
-            new_data, new_meta = result if isinstance(result, tuple) else (result, None)
-            if new_meta:
-                self.meta = new_meta
+            new_data, _new_meta, new_file_meta = result
+            self.file_meta.update(new_file_meta)
 
             self.data = self._concatenate_dataframes(self.data, new_data)
-            self.meta = self._meta_from_dataframe(self.data)
+            self.meta = _normalized_meta_from_file_meta(self.file_meta)
             return self.data
 
         # If no data exists yet, load from files
@@ -388,34 +520,43 @@ class CSIDataFile:
         input_path = self.paths if len(self.paths) > 1 else self.paths[0]
 
         result = _read_csi_files_impl(
-            input_path, metaonly=metaonly, quiet=quiet, sortindex=sortindex, **kwargs
+            input_path,
+            meta_only=meta_only,
+            quiet=quiet,
+            sortindex=sortindex,
+            collect_file_meta=True,
+            **kwargs,
         )
 
-        if metaonly:
-            self.meta = result
-            return result
+        if meta_only:
+            _raw_meta, file_meta = result
+            self.file_meta = file_meta
+            self.meta = _normalized_meta_from_file_meta(self.file_meta)
+            return self.meta
 
-        data, meta = result
-        self.meta = meta
-
+        data, _raw_meta, file_meta = result
+        self.file_meta = file_meta
         self.data = data
+        self.meta = _normalized_meta_from_file_meta(self.file_meta)
 
         return self.data
 
     def convert(self, output_file, output_format, quiet=True):
+        writer_meta = self.meta
+
         # Support conversion from in-memory DataFrame
         if self.data is not None and not self.paths:
             if not isinstance(self.data, pd.DataFrame):
                 raise TypeError("CSIDataFile.convert requires DataFrame data. Call read().")
             data = self.data
             if output_format.upper() in ["TOA5", "TOACI1"]:
-                write_csi_toa5(output_file, data, filetype=output_format.upper())
+                write_csi_toa5(output_file, data, filetype=output_format.upper(), meta=writer_meta)
             elif output_format.upper() == "TOB1":
-                write_csi_tob1(output_file, data)
+                write_csi_tob1(output_file, data, meta=writer_meta)
             elif output_format.upper() == "TOB3":
-                write_csi_tob3(output_file, data)
+                write_csi_tob3(output_file, data, meta=writer_meta)
             elif output_format.upper() == "CSIXML":
-                write_csi_csixml(output_file, data)
+                write_csi_csixml(output_file, data, meta=writer_meta)
             else:
                 raise ValueError(f"Unknown output format: {output_format}")
             return output_file
@@ -427,7 +568,7 @@ class CSIDataFile:
 
         if len(self.paths) == 1:
             return _convert_csi_file_impl(self.paths[0], output_file, output_format, quiet=quiet)
-        return _convert_csi_files_impl(self.paths, output_file, output_format, quiet=quiet)
+        return convert_csi_file(self.paths, output_file, output_format, quiet=quiet)
 
     def to_csv(self, output_file, split_window=None, index_label="TIMESTAMP", **kwargs):
         if self.data is None:
@@ -453,38 +594,18 @@ class CSIDataFile:
             return [output_file]
 
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        stem, ext = os.path.splitext(output_file)
-        ext = ext or ".csv"
-
         outputs = []
-        group_freq = split_window
-        if isinstance(split_window, str):
-            normalized_window = split_window.strip().lower()
-            window_delta = pd.to_timedelta(normalized_window)
-            if window_delta <= pd.Timedelta(0):
-                raise ValueError("split_window must be > 0")
-            # Keep the original frequency string for Grouper compatibility.
-            group_freq = normalized_window
-        elif isinstance(split_window, pd.Timedelta):
-            if split_window <= pd.Timedelta(0):
-                raise ValueError("split_window must be > 0")
-
-        grouped = dataframe.groupby(pd.Grouper(freq=group_freq))
-        for _, chunk in grouped:
-            if chunk.empty:
-                continue
-            start_str = pd.Timestamp(chunk.index.min()).strftime("%Y%m%dT%H%M%S")
-            end_str = chunk.index.max().strftime("%Y%m%dT%H%M%S")
-            outfile = f"{stem}_{start_str}_{end_str}{ext}"
+        for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, split_window):
+            outfile = _timestamped_output_path(output_file, start_ts, end_ts)
             chunk.to_csv(outfile, index_label=index_label, **kwargs)
             outputs.append(outfile)
 
         return outputs
 
 
-def read_csi_files(filename, metaonly=False, quiet=True, sortindex=True, **kwargs):
+def read_csi_files(filename, meta_only=False, quiet=True, sortindex=True, **kwargs):
     return _read_csi_files_impl(
-        filename, metaonly=metaonly, quiet=quiet, sortindex=sortindex, **kwargs
+        filename, meta_only=meta_only, quiet=quiet, sortindex=sortindex, **kwargs
     )
 
 
@@ -596,7 +717,7 @@ def read_csi_csixml(file_obj, meta, guesstype=False):
         data.append(entry)
 
     # Transpose to column-oriented (always bycol internally)
-    data = list(map(list, zip(*data)))
+    data = list(map(list, zip(*data, strict=False)))
 
     if guesstype:
         for i in range(len(data[1:])):
@@ -605,9 +726,9 @@ def read_csi_csixml(file_obj, meta, guesstype=False):
     # Build DataFrame from column-oriented data
     names = meta[1]
     units = meta[2] if len(meta) > 2 else [""] * len(names)
-    cols = [i + f" ({j})" if j else i for i, j in zip(names, units)]
+    cols = [i + f" ({j})" if j else i for i, j in zip(names, units, strict=False)]
 
-    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data)})
+    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data, strict=False)})
     dataframe = dataframe.set_index(dataframe.columns[0])
     dataframe.index = _coerce_timestamp_index(dataframe.index)
     dataframe.index.name = "TIMESTAMP"
@@ -629,7 +750,7 @@ def read_csi_toa5(file_obj, meta, guesstype=False):
     data = [i.rstrip().decode().replace('"', "").split(sep=",") for i in file_obj]
 
     # Transpose to column-oriented (always bycol internally)
-    data = list(map(list, zip(*data)))
+    data = list(map(list, zip(*data, strict=False)))
 
     if guesstype:
         for i in range(len(data[1:])):
@@ -638,9 +759,9 @@ def read_csi_toa5(file_obj, meta, guesstype=False):
     # Build DataFrame from column-oriented data
     names = meta[1]
     units = meta[2] if len(meta) > 2 else [""] * len(names)
-    cols = [i + f" ({j})" if j else i for i, j in zip(names, units)]
+    cols = [i + f" ({j})" if j else i for i, j in zip(names, units, strict=False)]
 
-    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data)})
+    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data, strict=False)})
     dataframe = dataframe.set_index(dataframe.columns[0])
     dataframe.index = _coerce_timestamp_index(dataframe.index)
     dataframe.index.name = "TIMESTAMP"
@@ -680,16 +801,16 @@ def read_csi_tob1(file_obj, meta):
         data.append(list(tempdata))
 
     # Transpose to column-oriented
-    data = list(map(list, zip(*data)))
+    data = list(map(list, zip(*data, strict=False)))
     datevec = read_csi_convert_tob1_daterec(data[:2], meta[1][:2])
     data = [datevec] + data[2:]
 
     # Build DataFrame from column-oriented data
     names = ["TIMESTAMP"] + meta[1][2:]  # Skip SECONDS, NANOSECONDS
     units = ["TS"] + meta[2][2:] if len(meta) > 2 else ["TS"] + [""] * len(meta[1][2:])
-    cols = [i + f" ({j})" if j else i for i, j in zip(names, units)]
+    cols = [i + f" ({j})" if j else i for i, j in zip(names, units, strict=False)]
 
-    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data)})
+    dataframe = pd.DataFrame({col: values for col, values in zip(cols, data, strict=False)})
     dataframe = dataframe.set_index(dataframe.columns[0])
     dataframe.index.name = "TIMESTAMP"
     dataframe = dataframe.sort_index()
@@ -905,7 +1026,7 @@ def read_csi_tob3(
     # Build DataFrame from records
     names = meta[2]  # TOB3 has field names in meta[2]
     units = meta[3] if len(meta) > 3 else [""] * len(names)
-    cols = [i + f" ({j})" if j else i for i, j in zip(names, units)]
+    cols = [i + f" ({j})" if j else i for i, j in zip(names, units, strict=False)]
 
     rec_df = pd.DataFrame(rec, columns=cols)
     rec_df.insert(0, "RECORD (RN)", recordnumber)
@@ -931,6 +1052,60 @@ def _ensure_datetime_index(dataframe):
     if not isinstance(dataframe.index, pd.DatetimeIndex):
         dataframe.index = pd.to_datetime(dataframe.index)
     return dataframe
+
+
+def _resolve_split_group_freq(split_window):
+    group_freq = split_window
+    if isinstance(split_window, str):
+        normalized_window = split_window.strip().lower()
+        window_delta = pd.to_timedelta(normalized_window)
+        if window_delta <= pd.Timedelta(0):
+            raise ValueError("split_window must be > 0")
+        return normalized_window
+
+    if isinstance(split_window, pd.Timedelta):
+        if split_window <= pd.Timedelta(0):
+            raise ValueError("split_window must be > 0")
+
+    return group_freq
+
+
+def _timestamped_output_path(output_file, start_ts, end_ts):
+    stem, ext = os.path.splitext(output_file)
+    ext = ext or ".dat"
+    start_str = pd.Timestamp(start_ts).strftime("%Y%m%dT%H%M%S")
+    end_str = pd.Timestamp(end_ts).strftime("%Y%m%dT%H%M%S")
+    return f"{stem}_{start_str}_{end_str}{ext}"
+
+
+def _resolve_meta_header_value(meta, row_index, col_index, current_value):
+    if meta and len(meta) > row_index and len(meta[row_index]) > col_index:
+        meta_value = meta[row_index][col_index]
+        if meta_value not in (None, "") and current_value == _DEFAULT_HEADER_VALUES[col_index]:
+            return meta_value
+    return current_value
+
+
+def _resolve_meta_process_values(meta, current_value, field_count):
+    if current_value != "Smp":
+        return [current_value] * field_count
+
+    if meta and len(meta) > 3:
+        process_values = [value if value not in (None, "") else current_value for value in meta[3]]
+        if len(process_values) < field_count:
+            process_values.extend([current_value] * (field_count - len(process_values)))
+        return process_values[:field_count]
+
+    return [current_value] * field_count
+
+
+def _iter_split_chunks(dataframe, split_window):
+    group_freq = _resolve_split_group_freq(split_window)
+    grouped = dataframe.groupby(pd.Grouper(freq=group_freq))
+    for _, chunk in grouped:
+        if chunk.empty:
+            continue
+        yield chunk, chunk.index.min(), chunk.index.max()
 
 
 def _prepare_export_dataframe(dataframe):
@@ -1017,14 +1192,22 @@ def write_csi_toa5(
     osversion="converted",
     program="converted",
     table="converted",
+    meta=None,
 ):
     if filetype not in ["TOA5", "TOACI1"]:
         raise ValueError("filetype must be TOA5 or TOACI1")
 
     export_df = _prepare_export_dataframe(dataframe)
 
+    station = _resolve_meta_header_value(meta, 0, 1, station)
+    logger = _resolve_meta_header_value(meta, 0, 2, logger)
+    serial = _resolve_meta_header_value(meta, 0, 3, serial)
+    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
+    program = _resolve_meta_header_value(meta, 0, 5, program)
+    table = _resolve_meta_header_value(meta, 0, 6, table)
+
     raw_names = ["TIMESTAMP"] + list(export_df.columns)
-    names, units = zip(*[_split_name_and_unit(col) for col in raw_names])
+    names, units = zip(*[_split_name_and_unit(col) for col in raw_names], strict=False)
 
     names_line = ",".join(f'"{name}"' for name in names)
     units_line = ",".join(f'"{unit}"' for unit in units)
@@ -1047,7 +1230,7 @@ def write_csi_toa5(
     write_df.to_csv(outfile, mode="a", header=False, index=True, float_format="%.6g")
 
 
-def write_csi_csixml(outfile, dataframe, process="Smp"):
+def write_csi_csixml(outfile, dataframe, process="Smp", meta=None):
     from xml.sax.saxutils import escape
 
     def _xml_safe_text(value):
@@ -1066,6 +1249,7 @@ def write_csi_csixml(outfile, dataframe, process="Smp"):
     export_df = _prepare_export_dataframe(dataframe)
     payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
     split_names = [_split_name_and_unit(col) for col in payload_cols]
+    process_values = _resolve_meta_process_values(meta, process, len(payload_cols))
 
     lines = [
         '<?xml version="1.0" encoding="utf-8"?>',
@@ -1074,10 +1258,12 @@ def write_csi_csixml(outfile, dataframe, process="Smp"):
         "    <fields>",
     ]
 
-    for (name, unit), source_col in zip(split_names, payload_cols):
+    for (name, unit), source_col, field_process in zip(
+        split_names, payload_cols, process_values, strict=False
+    ):
         dtype = _xml_field_type(export_df[source_col])
         lines.append(
-            f'      <field name="{escape(str(name))}" process="{escape(str(process))}" type="{dtype}" units="{escape(str(unit))}" />'
+            f'      <field name="{escape(str(name))}" process="{escape(str(field_process))}" type="{dtype}" units="{escape(str(unit))}" />'
         )
 
     lines.extend(
@@ -1118,8 +1304,16 @@ def write_csi_tob1(
     osversion="CR1000X.Std",
     program="converted",
     table="table",
+    meta=None,
 ):
     export_df = _prepare_export_dataframe(dataframe).sort_index()
+
+    station = _resolve_meta_header_value(meta, 0, 1, station)
+    logger = _resolve_meta_header_value(meta, 0, 2, logger)
+    serial = _resolve_meta_header_value(meta, 0, 3, serial)
+    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
+    program = _resolve_meta_header_value(meta, 0, 5, program)
+    table = _resolve_meta_header_value(meta, 0, 6, table)
 
     payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
     payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
@@ -1151,7 +1345,7 @@ def write_csi_tob1(
             record = int(row["RECORD (RN)"])
 
             values = [seconds, nanoseconds, record] + [row[c] for c in payload_cols]
-            for fmt, value in zip(pyformats, values):
+            for fmt, value in zip(pyformats, values, strict=False):
                 fobj.write(_pack_value(fmt, value))
 
 
@@ -1164,8 +1358,16 @@ def write_csi_tob3(
     osversion="CR3000.Std",
     program="converted",
     table="table",
+    meta=None,
 ):
     export_df = _prepare_export_dataframe(dataframe).sort_index()
+
+    station = _resolve_meta_header_value(meta, 0, 1, station)
+    logger = _resolve_meta_header_value(meta, 0, 2, logger)
+    serial = _resolve_meta_header_value(meta, 0, 3, serial)
+    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
+    program = _resolve_meta_header_value(meta, 0, 5, program)
+    table = _resolve_meta_header_value(meta, 0, 6, table)
 
     payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
     payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
@@ -1208,48 +1410,76 @@ def write_csi_tob3(
             record = int(row["RECORD (RN)"])
 
             fobj.write(struct.pack(fhdr, seconds, subsec, record))
-            for fmt, col in zip(pyformats, payload_cols):
+            for fmt, col in zip(pyformats, payload_cols, strict=False):
                 fobj.write(_pack_value(fmt, row[col]))
             fobj.write(struct.pack(ffoot, 0, validation))
 
 
-def _convert_csi_file_impl(input_file, output_file, output_format, quiet=True):
+def _convert_csi_file_impl(input_file, output_file, output_format, quiet=True, split_window=None):
     output_format = output_format.upper()
     output_file = _normalize_output_path(output_file, output_format)
-    data, meta = read_csi_files(input_file, quiet=quiet)
+    data, _raw_meta, file_meta = _read_csi_files_impl(
+        input_file,
+        quiet=quiet,
+        sortindex=True,
+        collect_file_meta=True,
+    )
+    meta = _normalized_meta_from_file_meta(file_meta)
+
+    if split_window is not None:
+        dataframe = _ensure_datetime_index(data).sort_index()
+        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+        outputs = []
+        for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, split_window):
+            outfile = _timestamped_output_path(output_file, start_ts, end_ts)
+            if output_format in ["TOA5", "TOACI1"]:
+                write_csi_toa5(outfile, chunk, filetype=output_format, meta=meta)
+            elif output_format == "TOB1":
+                write_csi_tob1(outfile, chunk, meta=meta)
+            elif output_format == "TOB3":
+                write_csi_tob3(outfile, chunk, meta=meta)
+            elif output_format == "CSIXML":
+                write_csi_csixml(outfile, chunk, meta=meta)
+            else:
+                raise ValueError(f"Unknown output format: {output_format}")
+            outputs.append(outfile)
+        return outputs
 
     if output_format in ["TOA5", "TOACI1"]:
-        write_csi_toa5(output_file, data, filetype=output_format)
+        write_csi_toa5(output_file, data, filetype=output_format, meta=meta)
     elif output_format == "TOB1":
-        write_csi_tob1(output_file, data)
+        write_csi_tob1(output_file, data, meta=meta)
     elif output_format == "TOB3":
-        write_csi_tob3(output_file, data)
+        write_csi_tob3(output_file, data, meta=meta)
     elif output_format == "CSIXML":
-        write_csi_csixml(output_file, data)
+        write_csi_csixml(output_file, data, meta=meta)
     else:
         raise ValueError(f"Unknown output format: {output_format}")
 
     return output_file
 
 
-def _convert_csi_files_impl(input_files, output_dir, output_format, quiet=True):
-    os.makedirs(output_dir, exist_ok=True)
-    outputs = []
-    output_format = output_format.upper()
-    for input_file in input_files:
-        basename = os.path.basename(input_file)
-        stem, _ = os.path.splitext(basename)
-        outfile = os.path.join(output_dir, f"{output_format}_{stem}.dat")
-        outputs.append(convert_csi_file(input_file, outfile, output_format, quiet=quiet))
-    return outputs
+def convert_csi_file(input_file, output_file, output_format, quiet=True, split_window=None):
+    if isinstance(input_file, list | tuple):
+        os.makedirs(output_file, exist_ok=True)
+        outputs = []
+        output_format = output_format.upper()
+        for one_input in input_file:
+            basename = os.path.basename(one_input)
+            stem, _ = os.path.splitext(basename)
+            outfile = os.path.join(output_file, f"{output_format}_{stem}.dat")
+            converted = _convert_csi_file_impl(
+                one_input, outfile, output_format, quiet=quiet, split_window=split_window
+            )
+            if isinstance(converted, list):
+                outputs.extend(converted)
+            else:
+                outputs.append(converted)
+        return outputs
 
-
-def convert_csi_file(input_file, output_file, output_format, quiet=True):
-    return _convert_csi_file_impl(input_file, output_file, output_format, quiet=quiet)
-
-
-def convert_csi_files(input_files, output_dir, output_format, quiet=True):
-    return _convert_csi_files_impl(input_files, output_dir, output_format, quiet=quiet)
+    return _convert_csi_file_impl(
+        input_file, output_file, output_format, quiet=quiet, split_window=split_window
+    )
 
 
 if __name__ == "__main__":

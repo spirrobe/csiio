@@ -214,6 +214,183 @@ class TestCampbellScientificIO(unittest.TestCase):
             chunk = pd.read_csv(output)
             self.assertGreater(len(chunk), 0)
 
+    def test_dataframe_initialization_sorts_by_timestamp(self):
+        unsorted = self.df.iloc[[3, 0, 5, 1, 4, 2]].copy()
+        reader = CSIDataFile(data=unsorted)
+
+        self.assertTrue(reader.data.index.is_monotonic_increasing)
+        self.assertListEqual(list(reader.data.index), sorted(unsorted.index))
+
+    def test_convert_split_window_writes_timestamped_outputs(self):
+        src = self.tmpdir / "source_for_convert.dat"
+        write_csi_toa5(str(src), self.df)
+
+        outputs = convert_csi_file(
+            str(src),
+            str(self.tmpdir / "converted.dat"),
+            "TOA5",
+            quiet=True,
+            split_window="1H",
+        )
+
+        self.assertIsInstance(outputs, list)
+        self.assertGreaterEqual(len(outputs), 2)
+
+        for output in outputs:
+            path = Path(output)
+            self.assertTrue(path.exists())
+            self.assertRegex(path.name, r"^TOA5_converted_\d{8}T\d{6}_\d{8}T\d{6}\.dat$")
+            loaded, _ = read_csi_files(str(path), asdataframe=True, sortindex=True, quiet=True)
+            self.assertGreater(len(loaded), 0)
+
+    def test_convert_csi_file_list_returns_one_output_per_input(self):
+        src1 = self.tmpdir / "batch_source_a.dat"
+        src2 = self.tmpdir / "batch_source_b.dat"
+        write_csi_toa5(str(src1), self.df)
+        write_csi_toa5(str(src2), self.df)
+
+        out_dir = self.tmpdir / "batch_out"
+        outputs = convert_csi_file(
+            [str(src1), str(src2)],
+            str(out_dir),
+            "TOB3",
+            quiet=True,
+        )
+
+        self.assertEqual(len(outputs), 2)
+        for output in outputs:
+            path = Path(output)
+            self.assertTrue(path.exists())
+            self.assertTrue(path.name.startswith("TOB3_"))
+            loaded, _ = read_csi_files(str(path), asdataframe=True, sortindex=True, quiet=True)
+            self.assertEqual(len(loaded), len(self.df))
+
+    def test_convert_csi_file_list_split_window_flattens_outputs(self):
+        src1 = self.tmpdir / "split_source_a.dat"
+        src2 = self.tmpdir / "split_source_b.dat"
+        write_csi_toa5(str(src1), self.df)
+        write_csi_toa5(str(src2), self.df)
+
+        out_dir = self.tmpdir / "split_batch_out"
+        outputs = convert_csi_file(
+            [str(src1), str(src2)],
+            str(out_dir),
+            "TOA5",
+            quiet=True,
+            split_window="1H",
+        )
+
+        self.assertGreaterEqual(len(outputs), 4)
+        for output in outputs:
+            path = Path(output)
+            self.assertTrue(path.exists())
+            self.assertRegex(path.name, r"^TOA5_split_source_[ab]_\d{8}T\d{6}_\d{8}T\d{6}\.dat$")
+
+    def test_writer_uses_meta_for_header_defaults_and_allows_overrides(self):
+        custom_meta = [
+            [
+                "TOA5",
+                "station-meta",
+                "logger-meta",
+                "serial-meta",
+                "os-meta",
+                "program-meta",
+                "table-meta",
+            ],
+            ["TIMESTAMP", "RECORD", "air_temp"],
+            ["TS", "RN", "degC"],
+            ["", "", "Smp"],
+        ]
+
+        meta_file = self.tmpdir / "meta_defaults.dat"
+        write_csi_toa5(str(meta_file), self.df, meta=custom_meta)
+
+        header = meta_file.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn('"station-meta"', header)
+        self.assertIn('"logger-meta"', header)
+        self.assertIn('"serial-meta"', header)
+        self.assertIn('"os-meta"', header)
+        self.assertIn('"program-meta"', header)
+        self.assertIn('"table-meta"', header)
+
+        override_file = self.tmpdir / "meta_override.dat"
+        write_csi_toa5(
+            str(override_file),
+            self.df,
+            meta=custom_meta,
+            station="station-override",
+        )
+
+        override_header = override_file.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn('"station-override"', override_header)
+        self.assertIn('"logger-meta"', override_header)
+
+    def test_reader_keeps_normalized_meta_and_per_file_meta(self):
+        toa5_path = self.tmpdir / "source_toa5.dat"
+        write_csi_toa5(str(toa5_path), self.df)
+
+        tob3_hint = self.tmpdir / "source_tob3.dat"
+        tob3_path = Path(convert_csi_file(str(toa5_path), str(tob3_hint), "TOB3", quiet=True))
+
+        reader = CSIDataFile([str(toa5_path), str(tob3_path)])
+        loaded = reader.read(quiet=True)
+
+        self.assertEqual(len(loaded), len(self.df) * 2)
+        self.assertEqual(reader.meta[1][:2], ["TIMESTAMP", "RECORD"])
+        self.assertEqual(set(reader.file_meta), {str(toa5_path), str(tob3_path)})
+        self.assertEqual(reader.file_meta[str(toa5_path)]["filetype"], "TOA5")
+        self.assertEqual(reader.file_meta[str(tob3_path)]["filetype"], "TOB3")
+        self.assertTrue(
+            any(
+                field["name"] == "TIMESTAMP" for field in reader.file_meta[str(toa5_path)]["fields"]
+            )
+        )
+
+    def test_convert_prefers_normalized_meta_over_file_meta(self):
+        reader = CSIDataFile(data=self.df.copy())
+        reader.meta = [
+            [
+                "TOA5",
+                "normalized-station",
+                "normalized-logger",
+                "normalized-serial",
+                "normalized-os",
+                "normalized-program",
+                "normalized-table",
+            ],
+            ["TIMESTAMP", "RECORD", "air_temp", "co2_flux"],
+            ["TS", "RN", "degC", "umol m-2 s-1"],
+            ["", "", "Smp", "Smp"],
+        ]
+        reader.file_meta = {
+            "fake_source.dat": {
+                "filetype": "TOA5",
+                "header": [
+                    "TOA5",
+                    "file-meta-station",
+                    "file-meta-logger",
+                    "file-meta-serial",
+                    "file-meta-os",
+                    "file-meta-program",
+                    "file-meta-table",
+                ],
+                "fields": [
+                    {"name": "TIMESTAMP", "unit": "TS", "process": "", "type": ""},
+                    {"name": "RECORD", "unit": "RN", "process": "", "type": ""},
+                    {"name": "air_temp", "unit": "degC", "process": "Smp", "type": ""},
+                ],
+            }
+        }
+
+        out_file = self.tmpdir / "normalized_meta_convert.dat"
+        reader.convert(str(out_file), "TOA5", quiet=True)
+
+        header = out_file.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn('"normalized-station"', header)
+        self.assertIn('"normalized-logger"', header)
+        self.assertIn('"normalized-program"', header)
+        self.assertNotIn('"file-meta-station"', header)
+
     def test_all_raw_fixtures_are_readable_as_dataframe(self):
         raw_files = _iter_raw_fixture_files()
         if not raw_files:
