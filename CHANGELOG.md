@@ -9,7 +9,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### CI/Build
 - Added a GitHub Actions test workflow running pytest on push/pull_request across Python 3.10, 3.11, 3.12, 3.13, and 3.14.
 - Updated the local changelog pre-commit hook to require CHANGELOG.md changes only when relevant staged code/config files are modified.
-
+- dependency to only push to pypi when testpypi succeeded
 ## [0.2.0]
 
 ### Added
