@@ -3,12 +3,13 @@ import logging
 import os
 import struct
 import xml.etree.ElementTree as ElementTree
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
 
-__author__ = "spirro00"
+__author__ = "spirrobe"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +31,24 @@ _DEFAULT_HEADER_VALUES = (
     "converted",
     "converted",
 )
+
+
+def _resolve_parallel_workers(task_count, max_workers=None):
+    if task_count <= 0:
+        return 1
+    cpu_count = os.cpu_count() or 1
+
+    if max_workers is not None:
+        if not isinstance(max_workers, int):
+            raise TypeError("max_workers must be an integer")
+        if max_workers < 1:
+            raise ValueError("max_workers must be >= 1")
+        if max_workers > cpu_count:
+            raise ValueError(f"max_workers must be <= available CPU count ({cpu_count})")
+        return min(max_workers, task_count)
+
+    default_workers = max(1, cpu_count // 4)
+    return max(1, min(default_workers, task_count))
 
 
 def _emit(message, level="info", quiet=False):
@@ -251,7 +270,13 @@ def _normalized_meta_from_file_meta(file_meta):
 
 
 def _read_csi_files_impl(
-    filename, meta_only=False, quiet=True, sortindex=True, collect_file_meta=False, **kwargs
+    filename,
+    meta_only=False,
+    quiet=True,
+    sortindex=True,
+    collect_file_meta=False,
+    max_workers=None,
+    **kwargs,
 ):
     # Backward compatibility: ignore legacy non-DataFrame flags.
     requested_as_dataframe = kwargs.pop("asdataframe", True)
@@ -261,17 +286,25 @@ def _read_csi_files_impl(
         )
 
     if isinstance(filename, list):
-        results = [
-            _read_csi_files_impl(
+        worker_count = _resolve_parallel_workers(len(filename), max_workers=max_workers)
+
+        def _read_single_file(file):
+            return _read_csi_files_impl(
                 file,
                 meta_only=meta_only,
                 quiet=quiet,
                 sortindex=sortindex,
                 collect_file_meta=collect_file_meta,
+                max_workers=max_workers,
                 **kwargs,
             )
-            for file in filename
-        ]
+
+        if worker_count == 1:
+            results = [_read_single_file(file) for file in filename]
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                results = list(executor.map(_read_single_file, filename))
+
         if meta_only:
             if collect_file_meta:
                 metas, file_meta = zip(*results, strict=False)
@@ -482,7 +515,7 @@ class CSIDataFile:
 
         return combined
 
-    def read(self, meta_only=False, quiet=True, sortindex=True, **kwargs):
+    def read(self, meta_only=False, quiet=True, sortindex=True, max_workers=None, **kwargs):
         # If data already exists and no paths provided, return stored data
         if not self.paths and self.data is not None:
             return self.data
@@ -496,6 +529,7 @@ class CSIDataFile:
                 quiet=quiet,
                 sortindex=sortindex,
                 collect_file_meta=True,
+                max_workers=max_workers,
                 **kwargs,
             )
             if meta_only:
@@ -525,6 +559,7 @@ class CSIDataFile:
             quiet=quiet,
             sortindex=sortindex,
             collect_file_meta=True,
+            max_workers=max_workers,
             **kwargs,
         )
 
@@ -541,7 +576,7 @@ class CSIDataFile:
 
         return self.data
 
-    def convert(self, output_file, output_format, quiet=True):
+    def convert(self, output_file, output_format, quiet=True, max_workers=None):
         writer_meta = self.meta
 
         # Support conversion from in-memory DataFrame
@@ -567,10 +602,16 @@ class CSIDataFile:
             )
 
         if len(self.paths) == 1:
-            return _convert_csi_file_impl(self.paths[0], output_file, output_format, quiet=quiet)
-        return convert_csi_file(self.paths, output_file, output_format, quiet=quiet)
+            return _convert_csi_file_impl(
+                self.paths[0], output_file, output_format, quiet=quiet, max_workers=max_workers
+            )
+        return convert_csi_file(
+            self.paths, output_file, output_format, quiet=quiet, max_workers=max_workers
+        )
 
-    def to_csv(self, output_file, split_window=None, index_label="TIMESTAMP", **kwargs):
+    def to_csv(
+        self, output_file, split_window=None, index_label="TIMESTAMP", max_workers=None, **kwargs
+    ):
         if self.data is None:
             # Try to load from paths if available
             if self.paths:
@@ -594,18 +635,35 @@ class CSIDataFile:
             return [output_file]
 
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        outputs = []
+        chunk_tasks = []
         for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, split_window):
             outfile = _timestamped_output_path(output_file, start_ts, end_ts)
+            chunk_tasks.append((chunk, outfile))
+
+        worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
+
+        def _write_csv_chunk(task):
+            chunk, outfile = task
             chunk.to_csv(outfile, index_label=index_label, **kwargs)
-            outputs.append(outfile)
+            return outfile
 
-        return outputs
+        if worker_count == 1:
+            return [_write_csv_chunk(task) for task in chunk_tasks]
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return list(executor.map(_write_csv_chunk, chunk_tasks))
 
 
-def read_csi_files(filename, meta_only=False, quiet=True, sortindex=True, **kwargs):
+def read_csi_files(
+    filename, meta_only=False, quiet=True, sortindex=True, max_workers=None, **kwargs
+):
     return _read_csi_files_impl(
-        filename, meta_only=meta_only, quiet=quiet, sortindex=sortindex, **kwargs
+        filename,
+        meta_only=meta_only,
+        quiet=quiet,
+        sortindex=sortindex,
+        max_workers=max_workers,
+        **kwargs,
     )
 
 
@@ -1415,7 +1473,9 @@ def write_csi_tob3(
             fobj.write(struct.pack(ffoot, 0, validation))
 
 
-def _convert_csi_file_impl(input_file, output_file, output_format, quiet=True, split_window=None):
+def _convert_csi_file_impl(
+    input_file, output_file, output_format, quiet=True, split_window=None, max_workers=None
+):
     output_format = output_format.upper()
     output_file = _normalize_output_path(output_file, output_format)
     data, _raw_meta, file_meta = _read_csi_files_impl(
@@ -1423,15 +1483,23 @@ def _convert_csi_file_impl(input_file, output_file, output_format, quiet=True, s
         quiet=quiet,
         sortindex=True,
         collect_file_meta=True,
+        max_workers=max_workers,
     )
     meta = _normalized_meta_from_file_meta(file_meta)
 
     if split_window is not None:
         dataframe = _ensure_datetime_index(data).sort_index()
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        outputs = []
+        chunk_tasks = []
         for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, split_window):
             outfile = _timestamped_output_path(output_file, start_ts, end_ts)
+
+            chunk_tasks.append((chunk, outfile))
+
+        worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
+
+        def _write_split_chunk(task):
+            chunk, outfile = task
             if output_format in ["TOA5", "TOACI1"]:
                 write_csi_toa5(outfile, chunk, filetype=output_format, meta=meta)
             elif output_format == "TOB1":
@@ -1442,8 +1510,13 @@ def _convert_csi_file_impl(input_file, output_file, output_format, quiet=True, s
                 write_csi_csixml(outfile, chunk, meta=meta)
             else:
                 raise ValueError(f"Unknown output format: {output_format}")
-            outputs.append(outfile)
-        return outputs
+            return outfile
+
+        if worker_count == 1:
+            return [_write_split_chunk(task) for task in chunk_tasks]
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            return list(executor.map(_write_split_chunk, chunk_tasks))
 
     if output_format in ["TOA5", "TOACI1"]:
         write_csi_toa5(output_file, data, filetype=output_format, meta=meta)
@@ -1459,8 +1532,16 @@ def _convert_csi_file_impl(input_file, output_file, output_format, quiet=True, s
     return output_file
 
 
-def convert_csi_file(input_file, output_file, output_format, quiet=True, split_window=None):
+def convert_csi_file(
+    input_file,
+    output_file,
+    output_format,
+    quiet=True,
+    split_window=None,
+    max_workers=None,
+):
     if isinstance(input_file, list | tuple):
+        _resolve_parallel_workers(len(input_file), max_workers=max_workers)
         os.makedirs(output_file, exist_ok=True)
         outputs = []
         output_format = output_format.upper()
@@ -1469,7 +1550,12 @@ def convert_csi_file(input_file, output_file, output_format, quiet=True, split_w
             stem, _ = os.path.splitext(basename)
             outfile = os.path.join(output_file, f"{output_format}_{stem}.dat")
             converted = _convert_csi_file_impl(
-                one_input, outfile, output_format, quiet=quiet, split_window=split_window
+                one_input,
+                outfile,
+                output_format,
+                quiet=quiet,
+                split_window=split_window,
+                max_workers=max_workers,
             )
             if isinstance(converted, list):
                 outputs.extend(converted)
@@ -1478,7 +1564,12 @@ def convert_csi_file(input_file, output_file, output_format, quiet=True, split_w
         return outputs
 
     return _convert_csi_file_impl(
-        input_file, output_file, output_format, quiet=quiet, split_window=split_window
+        input_file,
+        output_file,
+        output_format,
+        quiet=quiet,
+        split_window=split_window,
+        max_workers=max_workers,
     )
 
 

@@ -43,8 +43,12 @@ csv_files = reader.to_csv("/tmp/out.csv", split_window="1h")
 
 # Functional workflow
 df2, meta = read_csi_files("/path/to/file.dat")
+df_many, meta_many = read_csi_files(["/path/to/a.dat", "/path/to/b.dat"], max_workers=2)
 converted = convert_csi_file("/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5")
 split_outputs = convert_csi_file("/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5", split_window="1h")
+split_outputs_limited = convert_csi_file(
+    "/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5", split_window="1h", max_workers=2
+)
 
 # Initialize from an existing pandas DataFrame
 frame = pd.DataFrame(
@@ -53,7 +57,8 @@ frame = pd.DataFrame(
 )
 from_df = CSIDataFile(data=frame)
 csv_files = from_df.to_csv("/tmp/out.csv")
-converted_file = from_df.convert("/tmp/out.dat", "TOB3")
+split_csv_files = from_df.to_csv("/tmp/out.csv", split_window="1h", max_workers=2)
+converted_file = from_df.convert("/tmp/out.dat", "TOB3", max_workers=2)
 ```
 
 ## CLI (command line) Usage
@@ -70,14 +75,23 @@ csiio read /path/to/file.dat --meta-only
 # Stream CSV to stdout (good for shell pipelines)
 csiio read /path/to/file.dat --as-csv
 
+# Read many files with explicit worker limit
+csiio read /path/to/a.dat /path/to/b.dat --max-workers 2
+
 # Convert to another CSI format
 csiio convert /path/to/in.dat --output-format TOB3 --output /tmp/TOB3_out.dat
 
 # Convert to another CSI format and split by timewindow, useful for e.g. EC processing
 csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --output /tmp/TOB1_out.dat
 
+# Split conversion with explicit worker limit
+csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --output /tmp/TOB1_out.dat --max-workers 2
+
 # Export CSV and split by time window where time window is one of pandas known frequency strings found at https://pandas.pydata.org/docs/user_guide/timeseries.html#dateoffset-objects
 csiio to-csv /path/to/in.dat --output /tmp/out.csv --split-window 1h
+
+# Split CSV export with explicit worker limit
+csiio to-csv /path/to/in.dat --output /tmp/out.csv --split-window 1h --max-workers 2
 ```
 
 # Typical Use Cases and Functionality
@@ -189,6 +203,11 @@ Python:
 from csiio import convert_csi_file
 
 outputs = convert_csi_file("/path/to/in.dat", "/tmp/out.dat", "TOB3", split_window="1h")
+
+# Limit split-window writer threads
+outputs_limited = convert_csi_file(
+    "/path/to/in.dat", "/tmp/out.dat", "TOB3", split_window="1h", max_workers=2
+)
 ```
 
 
@@ -210,6 +229,8 @@ Time-window split export (Python):
 
 ```python
 outputs = reader.to_csv("/tmp/out.csv", split_window="1h")
+# Limit split-window writer threads
+outputs_limited = reader.to_csv("/tmp/out.csv", split_window="1h", max_workers=2)
 ```
 
 CLI equivalent:
@@ -253,6 +274,16 @@ Outcome:
 - `CSIDataFile` normalizes the DataFrame to a `TIMESTAMP` index and adds `RECORD (RN)` when missing.
 - `reader.meta` is auto-generated from the DataFrame columns.
 - You can export CSV or CSI files directly from the in-memory DataFrame.
+
+## Parallelism Controls
+
+- Parallel workers are enabled by default for:
+    - reading multiple files via list input
+    - split-window conversion writes
+    - split-window CSV writes
+- Default worker count is `max(1, cpu_count // 4)`, capped by number of tasks.
+- You can override with `max_workers` in Python API calls and `--max-workers` in CLI commands.
+- Safety check: `max_workers` must be an integer between `1` and available CPU count.
 
 ## 7) Stream Data Through Shell Pipelines
 

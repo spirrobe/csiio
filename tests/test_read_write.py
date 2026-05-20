@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from collections import Counter
@@ -285,6 +286,33 @@ class TestCampbellScientificIO(unittest.TestCase):
             path = Path(output)
             self.assertTrue(path.exists())
             self.assertRegex(path.name, r"^TOA5_split_source_[ab]_\d{8}T\d{6}_\d{8}T\d{6}\.dat$")
+
+    def test_read_many_files_accepts_explicit_max_workers(self):
+        src1 = self.tmpdir / "read_many_a.dat"
+        src2 = self.tmpdir / "read_many_b.dat"
+        write_csi_toa5(str(src1), self.df)
+        write_csi_toa5(str(src2), self.df)
+
+        loaded, _meta = read_csi_files([str(src1), str(src2)], quiet=True, max_workers=1)
+        self.assertEqual(len(loaded), len(self.df) * 2)
+
+    def test_max_workers_rejects_values_above_cpu_count(self):
+        src = self.tmpdir / "max_workers_src.dat"
+        write_csi_toa5(str(src), self.df)
+        too_high = (os.cpu_count() or 1) + 1
+
+        with self.assertRaises(ValueError):
+            read_csi_files([str(src)], quiet=True, max_workers=too_high)
+
+        with self.assertRaises(ValueError):
+            convert_csi_file(
+                str(src),
+                str(self.tmpdir / "out.dat"),
+                "TOA5",
+                quiet=True,
+                split_window="1H",
+                max_workers=too_high,
+            )
 
     def test_writer_uses_meta_for_header_defaults_and_allows_overrides(self):
         custom_meta = [

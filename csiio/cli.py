@@ -32,6 +32,12 @@ def build_parser():
         help="Read metadata only.",
     )
     p_read.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
+    p_read.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum worker threads for parallel read operations.",
+    )
     p_read.add_argument("--no-sortindex", action="store_true", help="Do not sort DataFrame index.")
     p_read.add_argument(
         "--as-csv", action="store_true", help="Print DataFrame as CSV to stdout (for shell pipes)."
@@ -50,6 +56,12 @@ def build_parser():
         "--split-window", default=None, help="Timedelta-like split window, e.g. 1H, 1D, 30min."
     )
     p_convert.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
+    p_convert.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum worker threads for split-window conversion writes.",
+    )
 
     p_csv = sub.add_parser(
         "to-csv", help="Read one or more files and export CSV (optionally split by time window)."
@@ -62,6 +74,12 @@ def build_parser():
         "--split-window", default=None, help="Timedelta-like split window, e.g. 1H, 1D, 30min."
     )
     p_csv.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
+    p_csv.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum worker threads for split-window CSV writes.",
+    )
     p_csv.add_argument("--no-sortindex", action="store_true", help="Do not sort DataFrame index.")
 
     return parser
@@ -75,7 +93,10 @@ def _cmd_read(args):
         raise ValueError("--as-csv cannot be used together with --meta-only.")
 
     result = reader.read(
-        meta_only=args.meta_only, quiet=args.quiet, sortindex=not args.no_sortindex
+        meta_only=args.meta_only,
+        quiet=args.quiet,
+        sortindex=not args.no_sortindex,
+        max_workers=args.max_workers,
     )
 
     if args.meta_only:
@@ -103,6 +124,7 @@ def _cmd_convert(args):
         args.output_format,
         quiet=args.quiet,
         split_window=args.split_window,
+        max_workers=args.max_workers,
     )
     if isinstance(output, list):
         for out in output:
@@ -115,8 +137,10 @@ def _cmd_convert(args):
 def _cmd_to_csv(args):
     paths = _comma_or_repeatable_paths(args.input)
     reader = CSIDataFile(paths if len(paths) > 1 else paths[0])
-    reader.read(quiet=args.quiet, sortindex=not args.no_sortindex)
-    outputs = reader.to_csv(args.output, split_window=args.split_window)
+    reader.read(quiet=args.quiet, sortindex=not args.no_sortindex, max_workers=args.max_workers)
+    outputs = reader.to_csv(
+        args.output, split_window=args.split_window, max_workers=args.max_workers
+    )
     for out in outputs:
         print(out)
     return 0
