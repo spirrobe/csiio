@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+- No changes yet.
+
+## [0.2.1] - 2026-05-21
+
 ### Added
 - Expanded test coverage with new CLI and internal helper test modules.
 - Added targeted `CSIDataFile` branch tests while preserving full end-to-end fixture sweep coverage.
