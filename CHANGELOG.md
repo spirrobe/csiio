@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+- Expanded test coverage with new CLI and internal helper test modules.
+- Added targeted `CSIDataFile` branch tests while preserving full end-to-end fixture sweep coverage.
+
+### CI/Build
+- Added a local pre-commit pytest fast gate (`not cardconvert`) and a full pytest pre-push gate.
+
 ## [0.2.0]
 
 ### Added

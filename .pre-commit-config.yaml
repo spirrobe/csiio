@@ -31,3 +31,17 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: pytest-check
+        name: Run fast pytest gate before commit
+        entry: python3 -m pytest -q --no-cov -k "not cardconvert"
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: pytest-full-on-push
+        name: Run full pytest suite before push
+        entry: python3 -m pytest -q --no-cov
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
