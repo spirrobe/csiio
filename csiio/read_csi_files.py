@@ -1285,7 +1285,14 @@ def write_csi_toa5(
 
     write_df = export_df.copy()
     write_df.index = write_df.index.strftime("%Y-%m-%d %H:%M:%S.%f").str.rstrip("0").str.rstrip(".")
-    write_df.to_csv(outfile, mode="a", header=False, index=True, float_format="%.6g")
+    write_df.to_csv(
+        outfile,
+        mode="a",
+        header=False,
+        index=True,
+        float_format="%.6g",
+        escapechar="\\",
+    )
 
 
 def write_csi_csixml(outfile, dataframe, process="Smp", meta=None):
