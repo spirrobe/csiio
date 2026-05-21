@@ -9,6 +9,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Fixed
 - Made fixture-heavy test cases more robust in CI by skipping CardConvert parity checks when no raw/reference pairs are discoverable in the environment.
 - Hardened TOA5 conversion smoke coverage to tolerate a known CSIXML parser edge-case while still requiring successful conversions.
+- Updated CI test workflow to fetch Git LFS fixture payloads and skip fixture-parity checks when only LFS pointer stubs are available.
 
 ## [0.2.1] - 2026-05-21
 
