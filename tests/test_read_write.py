@@ -177,6 +177,35 @@ class TestCampbellScientificIO(unittest.TestCase):
     def tearDown(self):
         self.tmpdir_obj.cleanup()
 
+    def test_read_with_pathlib_path(self):
+        """Ensure read_csi_files works with a single pathlib.Path object as input."""
+        src = self.tmpdir / "sample_pathlib_single.dat"
+        write_csi_toa5(str(src), self.df)
+        loaded, _ = read_csi_files(src, asdataframe=True, sortindex=True, quiet=True)
+        self.assertEqual(len(loaded), len(self.df))
+        self.assertTrue(isinstance(loaded.index, pd.DatetimeIndex))
+        self.assertEqual(
+            list(loaded.columns), ["RECORD (RN)", "air_temp (degC)", "co2_flux (umol m-2 s-1)"]
+        )
+
+    def test_read_with_list_of_pathlib_path(self):
+        """Ensure read_csi_files works with a list of pathlib.Path objects as input."""
+        src1 = self.tmpdir / "sample_pathlib_list1.dat"
+        src2 = self.tmpdir / "sample_pathlib_list2.dat"
+        write_csi_toa5(str(src1), self.df)
+        write_csi_toa5(str(src2), self.df)
+        loaded, _ = read_csi_files([src1, src2], asdataframe=True, sortindex=True, quiet=True)
+        self.assertEqual(len(loaded), len(self.df) * 2)
+
+    def test_read_with_mixed_path_types(self):
+        """Ensure read_csi_files works with a mix of Path and str in a list."""
+        src1 = self.tmpdir / "sample_pathlib_mixed1.dat"
+        src2 = self.tmpdir / "sample_pathlib_mixed2.dat"
+        write_csi_toa5(str(src1), self.df)
+        write_csi_toa5(str(src2), self.df)
+        loaded, _ = read_csi_files([src1, str(src2)], asdataframe=True, sortindex=True, quiet=True)
+        self.assertEqual(len(loaded), len(self.df) * 2)
+
     def test_write_and_read_toa5(self):
         src = self.tmpdir / "sample_toa5.dat"
         write_csi_toa5(str(src), self.df)

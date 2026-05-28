@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
 ## [Unreleased]
+- Support for pathlib inputs
 
 ### Fixed
 - Made fixture-heavy test cases more robust in CI by skipping CardConvert parity checks when no raw/reference pairs are discoverable in the environment.

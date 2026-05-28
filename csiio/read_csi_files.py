@@ -330,6 +330,11 @@ def _read_csi_files_impl(
             dataframe = dataframe.sort_index()
         return dataframe, list(meta)
 
+    if isinstance(filename, os.PathLike):
+        filename = os.fspath(filename)
+    elif not isinstance(filename, str):
+        raise TypeError("filename must be a string or os.PathLike object")
+
     filename = filename.strip()
 
     with open(filename, mode="rb") as file_obj:
