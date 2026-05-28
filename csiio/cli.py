@@ -55,6 +55,12 @@ def build_parser():
     p_convert.add_argument(
         "--split-window", default=None, help="Timedelta-like split window, e.g. 1H, 1D, 30min."
     )
+    p_convert.add_argument(
+        "--exists-action",
+        choices=["merge", "overwrite", "skip"],
+        default="overwrite",
+        help="Action to perform when the output file already exists.",
+    )
     p_convert.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
     p_convert.add_argument(
         "--max-workers",
@@ -125,6 +131,7 @@ def _cmd_convert(args):
         quiet=args.quiet,
         split_window=args.split_window,
         max_workers=args.max_workers,
+        exists_action=args.exists_action,
     )
     if isinstance(output, list):
         for out in output:

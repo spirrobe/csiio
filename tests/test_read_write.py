@@ -256,6 +256,69 @@ class TestCampbellScientificIO(unittest.TestCase):
             check_freq=False,
         )
 
+    def test_convert_existing_output_skip_keeps_existing_file(self):
+        src = self.tmpdir / "source.dat"
+        write_csi_toa5(str(src), self.df)
+
+        existing = self.df.copy()
+        existing.iloc[0, 0] = 99.9
+        existing.iloc[0, 1] = 9.9
+        existing_path = self.tmpdir / "existing.dat"
+        write_csi_toa5(str(existing_path), existing)
+
+        returned = convert_csi_file(
+            str(src),
+            str(existing_path),
+            "TOA5",
+            quiet=True,
+            exists_action="skip",
+        )
+
+        self.assertEqual(Path(returned), existing_path)
+        self.assertTrue(existing_path.exists())
+        loaded, _ = read_csi_files(str(existing_path), quiet=True)
+        self.assertEqual(len(loaded), len(existing))
+        self.assertEqual(float(loaded.iloc[0]["air_temp (degC)"]), 99.9)
+        self.assertEqual(float(loaded.iloc[0]["co2_flux (umol m-2 s-1)"]), 9.9)
+
+    def test_convert_existing_output_merge_combines_data(self):
+        src = self.tmpdir / "source.dat"
+        write_csi_toa5(str(src), self.df)
+
+        existing = pd.DataFrame(
+            {
+                "air_temp (degC)": [100.0, 100.0, 3.5],
+                "co2_flux (umol m-2 s-1)": [9.0, 9.0, 0.5],
+            },
+            index=pd.to_datetime(
+                ["2024-01-01 00:00:00", "2024-01-01 00:30:00", "2024-01-01 03:00:00"]
+            ),
+        )
+        existing_path = self.tmpdir / "existing_merge.dat"
+        write_csi_toa5(str(existing_path), existing)
+
+        returned = convert_csi_file(
+            str(src),
+            str(existing_path),
+            "TOA5",
+            quiet=True,
+            exists_action="merge",
+        )
+
+        self.assertEqual(Path(returned), existing_path)
+        loaded, _ = read_csi_files(str(existing_path), quiet=True)
+
+        self.assertEqual(len(loaded), len(self.df) + 1)
+        self.assertEqual(
+            float(loaded.loc[pd.Timestamp("2024-01-01 00:00:00"), "air_temp (degC)"]), 0.5
+        )
+        self.assertEqual(
+            float(loaded.loc[pd.Timestamp("2024-01-01 00:30:00"), "air_temp (degC)"]), 0.7
+        )
+        self.assertEqual(
+            float(loaded.loc[pd.Timestamp("2024-01-01 03:00:00"), "air_temp (degC)"]), 3.5
+        )
+
     def test_to_csv_split_window(self):
         src = self.tmpdir / "source_for_csv.dat"
         write_csi_toa5(str(src), self.df)
@@ -537,6 +600,51 @@ class TestCampbellScientificIO(unittest.TestCase):
         reader = CSIDataFile(data="not-a-dataframe")
         with self.assertRaises(TypeError):
             reader.convert(str(self.tmpdir / "x.dat"), "TOA5", quiet=True)
+
+    def test_reader_convert_in_memory_skip_existing_keeps_existing_file(self):
+        existing_path = self.tmpdir / "existing_reader.dat"
+        existing_df = self.df.copy()
+        existing_df.iloc[0, 0] = 99.9
+        existing_df.iloc[0, 1] = 9.9
+        write_csi_toa5(str(existing_path), existing_df)
+
+        reader = CSIDataFile(data=self.df.copy())
+        returned = reader.convert(str(existing_path), "TOA5", quiet=True, exists_action="skip")
+
+        self.assertEqual(Path(returned), existing_path)
+        loaded, _ = read_csi_files(str(existing_path), quiet=True)
+        self.assertEqual(len(loaded), len(existing_df))
+        self.assertEqual(float(loaded.iloc[0]["air_temp (degC)"]), 99.9)
+        self.assertEqual(float(loaded.iloc[0]["co2_flux (umol m-2 s-1)"]), 9.9)
+
+    def test_reader_convert_in_memory_merge_existing_file(self):
+        existing_path = self.tmpdir / "existing_reader_merge.dat"
+        existing_df = pd.DataFrame(
+            {
+                "air_temp (degC)": [100.0, 100.0, 3.5],
+                "co2_flux (umol m-2 s-1)": [9.0, 9.0, 0.5],
+            },
+            index=pd.to_datetime(
+                ["2024-01-01 00:00:00", "2024-01-01 00:30:00", "2024-01-01 03:00:00"]
+            ),
+        )
+        write_csi_toa5(str(existing_path), existing_df)
+
+        reader = CSIDataFile(data=self.df.copy())
+        returned = reader.convert(str(existing_path), "TOA5", quiet=True, exists_action="merge")
+
+        self.assertEqual(Path(returned), existing_path)
+        loaded, _ = read_csi_files(str(existing_path), quiet=True)
+        self.assertEqual(len(loaded), len(self.df) + 1)
+        self.assertEqual(
+            float(loaded.loc[pd.Timestamp("2024-01-01 00:00:00"), "air_temp (degC)"]), 0.5
+        )
+        self.assertEqual(
+            float(loaded.loc[pd.Timestamp("2024-01-01 00:30:00"), "air_temp (degC)"]), 0.7
+        )
+        self.assertEqual(
+            float(loaded.loc[pd.Timestamp("2024-01-01 03:00:00"), "air_temp (degC)"]), 3.5
+        )
 
     def test_all_raw_fixtures_are_readable_as_dataframe(self):
         raw_files = _fixtures_without_lfs_pointers(_iter_raw_fixture_files())

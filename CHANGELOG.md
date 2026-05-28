@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
 ## [Unreleased]
+
+### Added
+- Added `exists_action` support to `convert_csi_file`, `CSIDataFile.convert`, and the `csiio convert` CLI command. Supported values are `merge`, `overwrite`, and `skip`.
+- Added merge semantics for existing CSI output files with deduplication of duplicate timestamps when `merge` is used.
+
+### Docs
+- Documented split-window conversion output naming and CLI usage in `README.md`.
+
+## [0.2.2]
 - Support for pathlib inputs
 
 ### Fixed

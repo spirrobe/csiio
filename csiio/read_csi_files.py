@@ -330,13 +330,6 @@ def _read_csi_files_impl(
             dataframe = dataframe.sort_index()
         return dataframe, list(meta)
 
-    if isinstance(filename, os.PathLike):
-        filename = os.fspath(filename)
-    elif not isinstance(filename, str):
-        raise TypeError("filename must be a string or os.PathLike object")
-
-    filename = filename.strip()
-
     with open(filename, mode="rb") as file_obj:
         data = None
         firstline = file_obj.readline().rstrip().decode().split(sep=",")
@@ -581,7 +574,9 @@ class CSIDataFile:
 
         return self.data
 
-    def convert(self, output_file, output_format, quiet=True, max_workers=None):
+    def convert(
+        self, output_file, output_format, quiet=True, max_workers=None, exists_action="overwrite"
+    ):
         writer_meta = self.meta
 
         # Support conversion from in-memory DataFrame
@@ -589,6 +584,18 @@ class CSIDataFile:
             if not isinstance(self.data, pd.DataFrame):
                 raise TypeError("CSIDataFile.convert requires DataFrame data. Call read().")
             data = self.data
+            if os.path.exists(output_file):
+                if exists_action == "skip":
+                    return output_file
+                if exists_action == "merge":
+                    if not _is_csi_file(output_file):
+                        raise ValueError(
+                            f"Cannot merge existing output because '{output_file}' is not a CSI file"
+                        )
+                    existing, _ = read_csi_files(output_file, quiet=quiet)
+                    data = _merge_dataframes(existing, data)
+                elif exists_action != "overwrite":
+                    raise ValueError("exists_action must be 'merge', 'overwrite', or 'skip'")
             if output_format.upper() in ["TOA5", "TOACI1"]:
                 write_csi_toa5(output_file, data, filetype=output_format.upper(), meta=writer_meta)
             elif output_format.upper() == "TOB1":
@@ -608,10 +615,20 @@ class CSIDataFile:
 
         if len(self.paths) == 1:
             return _convert_csi_file_impl(
-                self.paths[0], output_file, output_format, quiet=quiet, max_workers=max_workers
+                self.paths[0],
+                output_file,
+                output_format,
+                quiet=quiet,
+                max_workers=max_workers,
+                exists_action=exists_action,
             )
         return convert_csi_file(
-            self.paths, output_file, output_format, quiet=quiet, max_workers=max_workers
+            self.paths,
+            output_file,
+            output_format,
+            quiet=quiet,
+            max_workers=max_workers,
+            exists_action=exists_action,
         )
 
     def to_csv(
@@ -1117,20 +1134,62 @@ def _ensure_datetime_index(dataframe):
     return dataframe
 
 
+def _is_csi_file(filepath):
+    try:
+        with open(filepath, "rb") as fh:
+            firstline = fh.readline().rstrip().decode("utf-8", errors="ignore").strip()
+    except OSError:
+        return False
+
+    if not firstline:
+        return False
+
+    first_token = firstline.split(",", 1)[0].replace('"', "").upper()
+    return first_token in {"TOA5", "TOB1", "TOB3", "TOACI1"} or first_token.startswith("<?XML")
+
+
+def _merge_dataframes(existing, new):
+    existing = _ensure_datetime_index(existing)
+    new = _ensure_datetime_index(new)
+    combined = pd.concat([existing, new])
+    combined = combined[~combined.index.duplicated(keep="last")]
+    return combined.sort_index()
+
+
+def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=True):
+    exists_action = str(exists_action).lower()
+    if exists_action not in {"merge", "overwrite", "skip"}:
+        raise ValueError("exists_action must be 'merge', 'overwrite', or 'skip'")
+
+    if not os.path.exists(output_file):
+        return dataframe
+
+    if exists_action == "skip":
+        return None
+
+    if exists_action == "overwrite":
+        return dataframe
+
+    if not _is_csi_file(output_file):
+        raise ValueError(f"Cannot merge existing output because '{output_file}' is not a CSI file")
+
+    existing, _ = read_csi_files(output_file, quiet=quiet)
+    return _merge_dataframes(existing, dataframe)
+
+
 def _resolve_split_group_freq(split_window):
-    group_freq = split_window
     if isinstance(split_window, str):
         normalized_window = split_window.strip().lower()
         window_delta = pd.to_timedelta(normalized_window)
         if window_delta <= pd.Timedelta(0):
             raise ValueError("split_window must be > 0")
-        return normalized_window
+        return window_delta
 
     if isinstance(split_window, pd.Timedelta):
         if split_window <= pd.Timedelta(0):
             raise ValueError("split_window must be > 0")
 
-    return group_freq
+    return split_window
 
 
 def _timestamped_output_path(output_file, start_ts, end_ts):
@@ -1486,10 +1545,24 @@ def write_csi_tob3(
 
 
 def _convert_csi_file_impl(
-    input_file, output_file, output_format, quiet=True, split_window=None, max_workers=None
+    input_file,
+    output_file,
+    output_format,
+    quiet=True,
+    split_window=None,
+    max_workers=None,
+    exists_action="overwrite",
 ):
     output_format = output_format.upper()
-    output_file = _normalize_output_path(output_file, output_format)
+    original_output_file = output_file
+    normalized_output_file = _normalize_output_path(output_file, output_format)
+    if os.path.exists(original_output_file):
+        output_file = original_output_file
+    elif os.path.exists(normalized_output_file):
+        output_file = normalized_output_file
+    else:
+        output_file = normalized_output_file
+
     data, _raw_meta, file_meta = _read_csi_files_impl(
         input_file,
         quiet=quiet,
@@ -1501,17 +1574,29 @@ def _convert_csi_file_impl(
 
     if split_window is not None:
         dataframe = _ensure_datetime_index(data).sort_index()
+        group_freq = _resolve_split_group_freq(split_window)
         os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
         chunk_tasks = []
-        for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, split_window):
-            outfile = _timestamped_output_path(output_file, start_ts, end_ts)
-
+        for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, group_freq):
+            outfile = _timestamped_output_path(
+                output_file, start_ts.floor(group_freq), end_ts.ceil(group_freq)
+            )
             chunk_tasks.append((chunk, outfile))
 
         worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
 
         def _write_split_chunk(task):
             chunk, outfile = task
+            if exists_action == "skip" and os.path.exists(outfile):
+                return outfile
+            if exists_action == "merge" and os.path.exists(outfile):
+                if not _is_csi_file(outfile):
+                    raise ValueError(
+                        f"Cannot merge existing output because '{outfile}' is not a CSI file"
+                    )
+                existing, _ = read_csi_files(outfile, quiet=quiet)
+                chunk = _merge_dataframes(existing, chunk)
+
             if output_format in ["TOA5", "TOACI1"]:
                 write_csi_toa5(outfile, chunk, filetype=output_format, meta=meta)
             elif output_format == "TOB1":
@@ -1529,6 +1614,10 @@ def _convert_csi_file_impl(
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             return list(executor.map(_write_split_chunk, chunk_tasks))
+
+    data = _prepare_output_for_existing(output_file, data, exists_action, quiet=quiet)
+    if data is None:
+        return output_file
 
     if output_format in ["TOA5", "TOACI1"]:
         write_csi_toa5(output_file, data, filetype=output_format, meta=meta)
@@ -1551,6 +1640,7 @@ def convert_csi_file(
     quiet=True,
     split_window=None,
     max_workers=None,
+    exists_action="overwrite",
 ):
     if isinstance(input_file, list | tuple):
         _resolve_parallel_workers(len(input_file), max_workers=max_workers)
@@ -1568,6 +1658,7 @@ def convert_csi_file(
                 quiet=quiet,
                 split_window=split_window,
                 max_workers=max_workers,
+                exists_action=exists_action,
             )
             if isinstance(converted, list):
                 outputs.extend(converted)
@@ -1582,6 +1673,7 @@ def convert_csi_file(
         quiet=quiet,
         split_window=split_window,
         max_workers=max_workers,
+        exists_action=exists_action,
     )
 
 

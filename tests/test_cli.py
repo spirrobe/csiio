@@ -136,6 +136,29 @@ def test_main_convert_prints_single_output_path():
     assert "single.dat" in buf.getvalue()
 
 
+def test_main_convert_passes_exists_action_to_convert_csi_file():
+    with patch("csiio.cli.convert_csi_file", return_value="out.dat") as convert_mock:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cli.main(
+                [
+                    "convert",
+                    "in.dat",
+                    "--output",
+                    "out.dat",
+                    "--output-format",
+                    "TOA5",
+                    "--exists-action",
+                    "merge",
+                    "--quiet",
+                ]
+            )
+
+    assert rc == 0
+    assert "out.dat" in buf.getvalue()
+    assert convert_mock.call_args.kwargs["exists_action"] == "merge"
+
+
 def test_main_to_csv_passes_max_workers_to_read_and_to_csv():
     reader = MagicMock()
     reader.to_csv.return_value = ["out_a.csv", "out_b.csv"]

@@ -45,7 +45,15 @@ csv_files = reader.to_csv("/tmp/out.csv", split_window="1h")
 df2, meta = read_csi_files("/path/to/file.dat")
 df_many, meta_many = read_csi_files(["/path/to/a.dat", "/path/to/b.dat"], max_workers=2)
 converted = convert_csi_file("/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5")
+converted_merge = convert_csi_file(
+    "/path/to/in.dat",
+    "/tmp/TOA5_out.dat",
+    "TOA5",
+    exists_action="merge",
+)
 split_outputs = convert_csi_file("/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5", split_window="1h")
+# Each output file includes the chunk start/end timestamps, e.g.:
+# TOA5_out_20240101T000000_20240101T010000.dat
 split_outputs_limited = convert_csi_file(
     "/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5", split_window="1h", max_workers=2
 )
@@ -59,6 +67,11 @@ from_df = CSIDataFile(data=frame)
 csv_files = from_df.to_csv("/tmp/out.csv")
 split_csv_files = from_df.to_csv("/tmp/out.csv", split_window="1h", max_workers=2)
 converted_file = from_df.convert("/tmp/out.dat", "TOB3", max_workers=2)
+converted_file_merge = from_df.convert(
+    "/tmp/out.dat",
+    "TOB3",
+    exists_action="merge",
+)
 ```
 
 ## CLI (command line) Usage
@@ -82,10 +95,20 @@ csiio read /path/to/a.dat /path/to/b.dat --max-workers 2
 csiio convert /path/to/in.dat --output-format TOB3 --output /tmp/TOB3_out.dat
 
 # Convert to another CSI format and split by timewindow, useful for e.g. EC processing
+# Output files are created per chunk with timestamps in the filename, e.g.
+# TOA5_out_20240101T000000_20240101T010000.dat
 csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --output /tmp/TOB1_out.dat
 
 # Split conversion with explicit worker limit
 csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --output /tmp/TOB1_out.dat --max-workers 2
+
+# When the output file already exists, choose merge, overwrite, or skip behavior
+csiio convert /path/to/in.dat --output-format TOB1 --output /tmp/TOB1_out.dat --exists-action merge
+
+# Output conflict behavior for convert
+# `merge` adds new rows and deduplicates on timestamp, `overwrite` replaces the existing output,
+# and `skip` leaves existing files untouched.
+csiio convert /path/to/in.dat --output-format TOB1 --output /tmp/TOB1_out.dat --exists-action skip
 
 # Export CSV and split by time window where time window is one of pandas known frequency strings found at https://pandas.pydata.org/docs/user_guide/timeseries.html#dateoffset-objects
 csiio to-csv /path/to/in.dat --output /tmp/out.csv --split-window 1h

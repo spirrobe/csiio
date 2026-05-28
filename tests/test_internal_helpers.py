@@ -67,7 +67,7 @@ def test_data_to_dataframe_rejects_empty_or_mismatch():
 
 
 def test_resolve_split_group_freq_valid_and_invalid():
-    assert rcf._resolve_split_group_freq("1H") == "1h"
+    assert rcf._resolve_split_group_freq("1H") == pd.Timedelta("1h")
     with pytest.raises(ValueError):
         rcf._resolve_split_group_freq("0H")
     with pytest.raises(ValueError):
