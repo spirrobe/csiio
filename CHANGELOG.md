@@ -13,8 +13,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 ### Docs
 - Documented split-window conversion output naming and CLI usage in `README.md`.
 
-## [0.2.2]
+## [0.2.2] - 2026-05-28
+### Added
 - Support for pathlib inputs
+- Added a Python support policy checker and GitHub Actions workflow to enforce supported runtime versions.
 
 ### Fixed
 - Made fixture-heavy test cases more robust in CI by skipping CardConvert parity checks when no raw/reference pairs are discoverable in the environment.
