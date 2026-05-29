@@ -4,19 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.2.2] - 2026-05-28
 
 ### Added
 - Added `exists_action` support to `convert_csi_file`, `CSIDataFile.convert`, and the `csiio convert` CLI command. Supported values are `merge`, `overwrite`, and `skip`.
 - Added merge semantics for existing CSI output files with deduplication of duplicate timestamps when `merge` is used.
+- Support for pathlib inputs
+- Added a Python support policy checker and GitHub Actions workflow to enforce supported runtime versions.
 
 ### Docs
 - Documented split-window conversion output naming and CLI usage in `README.md`.
-
-## [0.2.2] - 2026-05-28
-### Added
-- Support for pathlib inputs
-- Added a Python support policy checker and GitHub Actions workflow to enforce supported runtime versions.
 
 ### Fixed
 - Made fixture-heavy test cases more robust in CI by skipping CardConvert parity checks when no raw/reference pairs are discoverable in the environment.
