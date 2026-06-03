@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+- Updated changelog workflow to handle rewritten force-pushed history by fetching the base commit when needed and skipping the check if the base commit is unavailable.
+
 ## [0.3.0] - 2026-06-03
 
 ### Changed

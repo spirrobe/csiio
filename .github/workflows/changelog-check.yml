@@ -31,6 +31,16 @@ jobs:
             exit 0
           fi
 
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} not available locally; attempting to fetch it."
+            git fetch origin "${BASE_SHA}" || true
+          fi
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} is not available in the checkout; skipping changelog check."
+            exit 0
+          fi
+
           CHANGED_FILES=$(git diff --name-only "${BASE_SHA}"..."${{ github.sha }}")
           echo "Changed files:"
           echo "${CHANGED_FILES}"
