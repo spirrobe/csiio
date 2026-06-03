@@ -17,7 +17,7 @@ pip install -e .
 - Read CSI files into pandas DataFrames.
 - Auto-detect file type during reads.
 - Convert between supported CSI formats.
-- Export single CSV outputs or time-window-split CSVs.
+- Export single CSV outputs or time-window-split CSVs via `CSIDataFile.write(..., "CSV")` or `csiio convert --output-format CSV`.
 - Use either CLI workflows or Python API workflows.
 
 ## Changelog Policy
@@ -39,7 +39,7 @@ reader = CSIDataFile(["a.dat", "b.dat"])
 df = reader.read()
 normalized_meta = reader.meta
 per_file_meta = reader.file_meta
-csv_files = reader.to_csv("/tmp/out.csv", split_window="1h")
+csv_files = reader.write("/tmp/out.csv", "CSV", split_window="1h")
 
 # Functional workflow
 df2, meta = read_csi_files("/path/to/file.dat")
@@ -64,10 +64,10 @@ frame = pd.DataFrame(
     index=pd.date_range("2024-01-01 00:00:00", periods=3, freq="30min"),
 )
 from_df = CSIDataFile(data=frame)
-csv_files = from_df.to_csv("/tmp/out.csv")
-split_csv_files = from_df.to_csv("/tmp/out.csv", split_window="1h", max_workers=2)
-converted_file = from_df.convert("/tmp/out.dat", "TOB3", max_workers=2)
-converted_file_merge = from_df.convert(
+csv_files = from_df.write("/tmp/out.csv", "CSV")
+split_csv_files = from_df.write("/tmp/out.csv", "CSV", split_window="1h", max_workers=2)
+converted_file = from_df.write("/tmp/out.dat", "TOB3", max_workers=2)
+converted_file_merge = from_df.write(
     "/tmp/out.dat",
     "TOB3",
     exists_action="merge",
@@ -111,10 +111,10 @@ csiio convert /path/to/in.dat --output-format TOB1 --output /tmp/TOB1_out.dat --
 csiio convert /path/to/in.dat --output-format TOB1 --output /tmp/TOB1_out.dat --exists-action skip
 
 # Export CSV and split by time window where time window is one of pandas known frequency strings found at https://pandas.pydata.org/docs/user_guide/timeseries.html#dateoffset-objects
-csiio to-csv /path/to/in.dat --output /tmp/out.csv --split-window 1h
+csiio convert /path/to/in.dat --output-format CSV --output /tmp/out.csv --split-window 1h
 
 # Split CSV export with explicit worker limit
-csiio to-csv /path/to/in.dat --output /tmp/out.csv --split-window 1h --max-workers 2
+csiio convert /path/to/in.dat --output-format CSV --output /tmp/out.csv --split-window 1h --max-workers 2
 ```
 
 # Typical Use Cases and Functionality
@@ -160,6 +160,16 @@ data, meta = read_csi_files("/path/to/file.dat")
 
 # read many files
 data, meta = read_csi_files(["/path/to/file.dat", "/path/to/another/file.dat"])
+
+# read only selected columns
+data, meta = read_csi_files(
+    "/path/to/file.dat",
+    columns=["air_temp (degC)", "co2_flux (umol m-2 s-1)"],
+)
+
+If none of the requested columns exist in the file, the reader raises a `ValueError`.
+
+When reading multiple files, if at least one file contains some requested columns, any files with no matching columns are logged as warnings and the remaining data is still returned.
 ```
 
 Outcome:
@@ -245,21 +255,21 @@ from csiio import CSIDataFile
 
 reader = CSIDataFile("/path/to/in.dat")
 reader.read()
-outputs = reader.to_csv("/tmp/out.csv")
+outputs = reader.write("/tmp/out.csv", "CSV")
 ```
 
 Time-window split export (Python):
 
 ```python
-outputs = reader.to_csv("/tmp/out.csv", split_window="1h")
+outputs = reader.write("/tmp/out.csv", "CSV", split_window="1h")
 # Limit split-window writer threads
-outputs_limited = reader.to_csv("/tmp/out.csv", split_window="1h", max_workers=2)
+outputs_limited = reader.write("/tmp/out.csv", "CSV", split_window="1h", max_workers=2)
 ```
 
 CLI equivalent:
 
 ```bash
-csiio to-csv /path/to/in.dat --output /tmp/out.csv --split-window 1h
+csiio convert /path/to/in.dat --output-format CSV --output /tmp/out.csv --split-window 1h
 ```
 
 ## 6) Initialize from a pandas DataFrame
@@ -283,13 +293,13 @@ frame = pd.DataFrame(
 reader = CSIDataFile(data=frame)
 
 # Export CSV directly
-csv_files = reader.to_csv("/tmp/out.csv")
+csv_files = reader.write("/tmp/out.csv", "CSV")
 
 # Export split CSV files
-split_csv_files = reader.to_csv("/tmp/out.csv", split_window="1h")
+split_csv_files = reader.write("/tmp/out.csv", "CSV", split_window="1h")
 
 # Convert directly to a CSI format
-tob3_file = reader.convert("/tmp/out.dat", "TOB3")
+tob3_file = reader.write("/tmp/out.dat", "TOB3")
 ```
 
 Outcome:
@@ -322,6 +332,7 @@ The package currently exposes:
 
 #### Instance
 - CSIDataFile
+  - `CSIDataFile.write(output_file, output_format, ...)`
 #### Instance / Reading
 - read_csi_files
 - read_csi_meta
@@ -332,7 +343,7 @@ The package currently exposes:
 #### Conversion
 - convert_csi_file
 #### Writing
-- write_csi_toa5
+- write_csi_ascii
 - write_csi_tob1
 - write_csi_tob3
 - write_csi_csixml

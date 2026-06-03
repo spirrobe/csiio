@@ -6,7 +6,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-rcf = importlib.import_module("csiio.read_csi_files")
+rcf = importlib.import_module("csiio._helpers")
+ccf = importlib.import_module("csiio.convert_csi_files")
 
 
 def test_resolve_parallel_workers_zero_tasks_returns_one():
@@ -27,6 +28,13 @@ def test_fp22float_special_values_and_to_float_if_possible():
     assert pd.isna(rcf.fp22float(0x9FFE))
     assert rcf._to_float_if_possible("3.5") == 3.5
     assert rcf._to_float_if_possible("x") == "x"
+
+
+def test_is_csi_file_detects_csixml(tmp_path):
+    xml_text = '<?xml version="1.0" encoding="utf-8"?>\n<csixml version="1.0">\n</csixml>\n'
+    path = tmp_path / "test.csixml"
+    path.write_text(xml_text, encoding="utf-8")
+    assert rcf._is_csi_file(str(path))
 
 
 def test_coerce_timestamp_index_multiple_formats():
@@ -110,10 +118,11 @@ def test_convert_split_chunk_writer_branches_and_unknown_output(tmp_path, monkey
     def fake_read(*args, **kwargs):
         return df, meta, {"fake": {"header": meta[0], "fields": []}}
 
-    monkeypatch.setattr(rcf, "_read_csi_files_impl", fake_read)
+    read_csi = importlib.import_module("csiio.read_csi_files")
+    monkeypatch.setattr(read_csi, "_read_csi_files_impl", fake_read)
 
     for fmt in ["TOA5", "TOB1", "TOB3", "CSIXML"]:
-        outputs = rcf._convert_csi_file_impl(
+        outputs = ccf._convert_csi_file_impl(
             "in.dat",
             str(tmp_path / f"out_{fmt}.dat"),
             fmt,
@@ -127,7 +136,7 @@ def test_convert_split_chunk_writer_branches_and_unknown_output(tmp_path, monkey
             assert Path(out).exists()
 
     with pytest.raises(ValueError):
-        rcf._convert_csi_file_impl(
+        ccf._convert_csi_file_impl(
             "in.dat",
             str(tmp_path / "bad.dat"),
             "BAD",

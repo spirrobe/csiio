@@ -1,0 +1,356 @@
+import os
+import struct
+from concurrent.futures import ThreadPoolExecutor
+from xml.sax.saxutils import escape
+
+import pandas as pd
+
+from ._helpers import (
+    BASEDATE,
+    _ensure_datetime_index,
+    _infer_struct_format,
+    _iter_split_chunks,
+    _merge_dataframes,
+    _pack_value,
+    _prepare_export_dataframe,
+    _prepare_output_for_existing,
+    _resolve_meta_header_value,
+    _resolve_meta_process_values,
+    _resolve_parallel_workers,
+    _resolve_split_group_freq,
+    _split_name_and_unit,
+    _timestamped_output_path,
+    read_csi_formats,
+)
+
+
+def _read_existing_csv(filepath, index_label="TIMESTAMP"):
+    if not os.path.exists(filepath):
+        return None
+    existing = pd.read_csv(filepath, parse_dates=[index_label], index_col=index_label)
+    existing.index.name = index_label
+    return existing
+
+
+def _write_csi_file(output_file, dataframe, output_format, meta=None, quiet=True):
+    if output_format in ["TOA5", "TOACI1", "CSV"]:
+        write_csi_ascii(output_file, dataframe, filetype=output_format, meta=meta)
+    elif output_format == "TOB1":
+        write_csi_tob1(output_file, dataframe, meta=meta)
+    elif output_format == "TOB3":
+        write_csi_tob3(output_file, dataframe, meta=meta)
+    elif output_format == "CSIXML":
+        write_csi_csixml(output_file, dataframe, meta=meta)
+    else:
+        raise ValueError(f"Unknown output format: {output_format}")
+    return output_file
+
+
+def write_csi_files(
+    output_file,
+    dataframe,
+    output_format,
+    split_window=None,
+    max_workers=None,
+    exists_action="merge",
+    quiet=True,
+    meta=None,
+):
+    output_format = output_format.upper()
+
+    if split_window is None:
+        if output_format == "CSV":
+            if exists_action == "skip" and os.path.exists(output_file):
+                return output_file
+            if exists_action == "merge" and os.path.exists(output_file):
+                existing = _read_existing_csv(output_file)
+                if existing is None:
+                    raise ValueError(
+                        f"Cannot merge existing output because '{output_file}' is not a CSV file"
+                    )
+                dataframe = _merge_dataframes(existing, dataframe)
+            os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+            return _write_csi_file(output_file, dataframe, output_format, meta=meta)
+
+        dataframe = _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=quiet)
+        if dataframe is None:
+            return output_file
+        return _write_csi_file(output_file, dataframe, output_format, meta=meta)
+
+    dataframe = _ensure_datetime_index(dataframe).sort_index()
+    group_freq = _resolve_split_group_freq(split_window)
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+    chunk_tasks = []
+    for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, group_freq):
+        outfile = _timestamped_output_path(
+            output_file, start_ts.floor(group_freq), end_ts.ceil(group_freq)
+        )
+        chunk_tasks.append((chunk, outfile))
+
+    worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
+
+    def _write_split_chunk(task):
+        chunk, outfile = task
+        if exists_action == "skip" and os.path.exists(outfile):
+            return outfile
+        if exists_action == "merge" and os.path.exists(outfile):
+            if output_format == "CSV":
+                existing = _read_existing_csv(outfile)
+                if existing is None:
+                    raise ValueError(
+                        f"Cannot merge existing output because '{outfile}' is not a CSV file"
+                    )
+                chunk = _merge_dataframes(existing, chunk)
+            else:
+                chunk = _prepare_output_for_existing(outfile, chunk, exists_action, quiet=quiet)
+        return _write_csi_file(outfile, chunk, output_format, meta=meta, quiet=quiet)
+
+    if worker_count == 1:
+        return [_write_split_chunk(task) for task in chunk_tasks]
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(_write_split_chunk, chunk_tasks))
+
+
+def write_csi_ascii(
+    outfile,
+    dataframe,
+    filetype="TOA5",
+    station="converted",
+    logger="converted",
+    serial="converted",
+    osversion="converted",
+    program="converted",
+    table="converted",
+    meta=None,
+):
+    if filetype not in ["TOA5", "TOACI1", "CSV"]:
+        raise ValueError("filetype must be TOA5, TOACI1, or CSV")
+
+    export_df = _prepare_export_dataframe(dataframe)
+
+    station = _resolve_meta_header_value(meta, 0, 1, station)
+    logger = _resolve_meta_header_value(meta, 0, 2, logger)
+    serial = _resolve_meta_header_value(meta, 0, 3, serial)
+    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
+    program = _resolve_meta_header_value(meta, 0, 5, program)
+    table = _resolve_meta_header_value(meta, 0, 6, table)
+
+    raw_names = ["TIMESTAMP"] + list(export_df.columns)
+    names, units = zip(*[_split_name_and_unit(col) for col in raw_names], strict=False)
+
+    names_line = ",".join(f'"{name}"' for name in names)
+    units_line = ",".join(f'"{unit}"' for unit in units)
+    sampled_as_line = ",".join('""' for _ in names)
+
+    header = [
+        f'"{filetype}","{station}","{logger}","{serial}","{osversion}","{program}","{table}"',
+        names_line,
+        units_line,
+    ]
+
+    if filetype == "TOA5":
+        header.append(sampled_as_line)
+
+    kwargs = {
+        "index": True,
+        "float_format": "%.6g",
+        "escapechar": "\\",
+    }
+    if filetype != "CSV":
+        with open(outfile, "w", encoding="utf-8") as fobj:
+            fobj.write("\n".join(header) + "\n")
+
+        write_df = export_df.copy()
+        write_df.index = (
+            write_df.index.strftime("%Y-%m-%d %H:%M:%S.%f").str.rstrip("0").str.rstrip(".")
+        )
+        write_df.to_csv(
+            outfile,
+            mode="a",
+            header=False,
+            **kwargs,
+        )
+    else:
+        export_df.to_csv(outfile, **kwargs)  # Write CSV without header
+
+
+def write_csi_csixml(outfile, dataframe, process="Smp", meta=None):
+    def _xml_safe_text(value):
+        if pd.isna(value):
+            return ""
+        text = str(value).replace("\x00", "")
+        text = text.replace("\r", "").replace("\n", "")
+        return "".join(ch for ch in text if ch == "\t" or ord(ch) >= 0x20)
+
+    def _xml_field_type(series):
+        numeric = pd.to_numeric(series.dropna(), errors="coerce")
+        return "xsd:float" if numeric.notna().all() else "xsd:string"
+
+    export_df = _prepare_export_dataframe(dataframe)
+    payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
+    split_names = [_split_name_and_unit(col) for col in payload_cols]
+    process_values = _resolve_meta_process_values(meta, process, len(payload_cols))
+
+    lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<csixml version="1.0">',
+        "  <head>",
+        "    <fields>",
+    ]
+
+    for (name, unit), source_col, field_process in zip(
+        split_names, payload_cols, process_values, strict=False
+    ):
+        dtype = _xml_field_type(export_df[source_col])
+        lines.append(
+            f'      <field name="{escape(str(name))}" process="{escape(str(field_process))}" type="{dtype}" units="{escape(str(unit))}" />'
+        )
+
+    lines.extend(
+        [
+            "    </fields>",
+            "  </head>",
+            "  <data>",
+        ]
+    )
+
+    for timestamp, row in export_df.iterrows():
+        recno = int(row["RECORD (RN)"]) if "RECORD (RN)" in row else 0
+        ts = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
+        lines.append(f'    <r time="{ts}" no="{recno}">')
+        for idx, col in enumerate(payload_cols, start=1):
+            value = row[col]
+            text = escape(_xml_safe_text(value))
+            lines.append(f"      <v{idx}>{text}</v{idx}>")
+        lines.append("    </r>")
+
+    lines.extend(
+        [
+            "  </data>",
+            "</csixml>",
+        ]
+    )
+
+    with open(outfile, "w", encoding="utf-8") as fobj:
+        fobj.write("\n".join(lines) + "\n")
+
+
+def write_csi_tob1(
+    outfile,
+    dataframe,
+    station="converted",
+    logger="CR1000X",
+    serial="0",
+    osversion="CR1000X.Std",
+    program="converted",
+    table="table",
+    meta=None,
+):
+    export_df = _prepare_export_dataframe(dataframe).sort_index()
+
+    station = _resolve_meta_header_value(meta, 0, 1, station)
+    logger = _resolve_meta_header_value(meta, 0, 2, logger)
+    serial = _resolve_meta_header_value(meta, 0, 3, serial)
+    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
+    program = _resolve_meta_header_value(meta, 0, 5, program)
+    table = _resolve_meta_header_value(meta, 0, 6, table)
+
+    payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
+    payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
+    payload_names = [name for name, _ in payload_names_units]
+    payload_units = [unit for _, unit in payload_names_units]
+
+    payload_formats = [_infer_struct_format(export_df[c], tob3=False) for c in payload_cols]
+    pyformats = read_csi_formats(["ULONG", "ULONG", "ULONG"] + payload_formats)
+
+    header = [
+        f'"TOB1","{station}","{logger}","{serial}","{osversion}","CPU:{program}","0","{table}"',
+        ",".join(f'"{x}"' for x in (["SECONDS", "NANOSECONDS", "RECORD"] + payload_names)),
+        ",".join(f'"{x}"' for x in (["SECONDS", "NANOSECONDS", "RN"] + payload_units)),
+        ",".join('""' for _ in ["SECONDS", "NANOSECONDS", "RECORD"])
+        + ("," if payload_names else "")
+        + ",".join('"Smp"' for _ in payload_names),
+        ",".join(f'"{x}"' for x in (["ULONG", "ULONG", "ULONG"] + payload_formats)),
+    ]
+
+    with open(outfile, "wb") as fobj:
+        fobj.write(("\n".join(header) + "\n").encode("utf-8"))
+
+        basedate_ts = pd.Timestamp(BASEDATE)
+        for ts, row in export_df.iterrows():
+            delta = ts - basedate_ts
+            total_ns = int(delta.total_seconds() * 1_000_000_000)
+            seconds = total_ns // 1_000_000_000
+            nanoseconds = total_ns % 1_000_000_000
+            record = int(row["RECORD (RN)"])
+
+            values = [seconds, nanoseconds, record] + [row[c] for c in payload_cols]
+            for fmt, value in zip(pyformats, values, strict=False):
+                fobj.write(_pack_value(fmt, value))
+
+
+def write_csi_tob3(
+    outfile,
+    dataframe,
+    station="converted",
+    logger="CR3000",
+    serial="0",
+    osversion="CR3000.Std",
+    program="converted",
+    table="table",
+    meta=None,
+):
+    export_df = _prepare_export_dataframe(dataframe).sort_index()
+
+    station = _resolve_meta_header_value(meta, 0, 1, station)
+    logger = _resolve_meta_header_value(meta, 0, 2, logger)
+    serial = _resolve_meta_header_value(meta, 0, 3, serial)
+    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
+    program = _resolve_meta_header_value(meta, 0, 5, program)
+    table = _resolve_meta_header_value(meta, 0, 6, table)
+
+    payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
+    payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
+    payload_names = [name for name, _ in payload_names_units]
+    payload_units = [unit for _, unit in payload_names_units]
+
+    payload_formats = [_infer_struct_format(export_df[c], tob3=True) for c in payload_cols]
+    pyformats = read_csi_formats(payload_formats)
+
+    fhdrformats = ["L", "l", "i", "I"]
+    hdrformat = "L"
+    for _ in fhdrformats:
+        if struct.Struct(3 * _).size == 12:
+            hdrformat = _
+    fhdr, ffoot = 3 * hdrformat, "HH"
+
+    subrecsizes = sum(struct.Struct(fmt).size for fmt in pyformats)
+    n_rec_frame = 1
+    framesize = struct.Struct(fhdr + ffoot).size + subrecsizes * n_rec_frame
+    validation = 60288
+
+    header = [
+        f'"TOB3","{station}","{logger}","{serial}","{osversion}","CPU:{program}","0","{table}"',
+        f'"{table}","1 SEC","{framesize}","{len(export_df)}","{validation}","Sec1Usec","0","0","0"',
+        ",".join(f'"{x}"' for x in payload_names),
+        ",".join(f'"{x}"' for x in payload_units),
+        ",".join('"Smp"' for _ in payload_names),
+        ",".join(f'"{x}"' for x in payload_formats),
+    ]
+
+    with open(outfile, "wb") as fobj:
+        fobj.write(("\n".join(header) + "\n").encode("utf-8"))
+
+        basedate_ts = pd.Timestamp(BASEDATE)
+        for ts, row in export_df.iterrows():
+            delta = ts - basedate_ts
+            total_us = int(delta.total_seconds() * 1_000_000)
+            seconds = total_us // 1_000_000
+            subsec = total_us % 1_000_000
+            record = int(row["RECORD (RN)"])
+
+            fobj.write(struct.pack(fhdr, seconds, subsec, record))
+            for fmt, col in zip(pyformats, payload_cols, strict=False):
+                fobj.write(_pack_value(fmt, row[col]))
+            fobj.write(struct.pack(ffoot, 0, validation))

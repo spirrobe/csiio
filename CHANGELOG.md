@@ -4,16 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.3.0] - 2026-06-03
+
+### Changed
+- Refactored reader and writer logic into separate modules and split convert into a thin wrapper around read + write.
+- Updated `CSIDataFile` to act as a lightweight convenience wrapper around read/write functionality.
+- Added support for reading only a subset of requested columns and preserving requested columns across concatenated multi-file reads.
+- Changed multi-file read semantics so missing columns in some files are logged but remaining data is still returned when at least one file contains requested columns.
+- Added stricter single-file behavior: reading with requested columns now raises if none of the requested columns are present.
+
 ## [0.2.2] - 2026-05-28
 
 ### Added
-- Added `exists_action` support to `convert_csi_file`, `CSIDataFile.convert`, and the `csiio convert` CLI command. Supported values are `merge`, `overwrite`, and `skip`.
+- Added `exists_action` support to `convert_csi_file`, `CSIDataFile.write`, and the `csiio convert` CLI command. Supported values are `merge`, `overwrite`, and `skip`.
 - Added merge semantics for existing CSI output files with deduplication of duplicate timestamps when `merge` is used.
 - Support for pathlib inputs
 - Added a Python support policy checker and GitHub Actions workflow to enforce supported runtime versions.
 
 ### Docs
 - Documented split-window conversion output naming and CLI usage in `README.md`.
+- Updated README to reflect CSV export via `csiio convert --output-format CSV` and `CSIDataFile.write(..., output_format='CSV')` instead of the removed `to-csv` CLI flow.
 
 ### Fixed
 - Made fixture-heavy test cases more robust in CI by skipping CardConvert parity checks when no raw/reference pairs are discoverable in the environment.

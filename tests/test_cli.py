@@ -159,37 +159,25 @@ def test_main_convert_passes_exists_action_to_convert_csi_file():
     assert convert_mock.call_args.kwargs["exists_action"] == "merge"
 
 
-def test_main_to_csv_passes_max_workers_to_read_and_to_csv():
-    reader = MagicMock()
-    reader.to_csv.return_value = ["out_a.csv", "out_b.csv"]
-
-    with patch("csiio.cli.CSIDataFile", return_value=reader):
+def test_main_convert_csv_calls_convert_csi_file():
+    with patch("csiio.cli.convert_csi_file", return_value="out.csv") as convert_mock:
         buf = io.StringIO()
         with redirect_stdout(buf):
             rc = cli.main(
                 [
-                    "to-csv",
-                    "a.dat,b.dat",
+                    "convert",
+                    "in.dat",
                     "--output",
                     "out.csv",
-                    "--split-window",
-                    "1H",
-                    "--max-workers",
-                    "2",
+                    "--output-format",
+                    "CSV",
                     "--quiet",
                 ]
             )
 
     assert rc == 0
-    assert "out_a.csv" in buf.getvalue()
-    assert "out_b.csv" in buf.getvalue()
-
-    read_kwargs = reader.read.call_args.kwargs
-    assert read_kwargs["max_workers"] == 2
-
-    csv_kwargs = reader.to_csv.call_args.kwargs
-    assert csv_kwargs["max_workers"] == 2
-    assert csv_kwargs["split_window"] == "1H"
+    assert "out.csv" in buf.getvalue()
+    assert convert_mock.call_args.args[2] == "CSV"
 
 
 def test_main_unknown_command_prints_help_and_returns_2():

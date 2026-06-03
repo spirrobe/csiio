@@ -3,7 +3,8 @@ import sys
 
 import pandas as pd
 
-from .read_csi_files import CSIDataFile, convert_csi_file
+from .convert_csi_files import convert_csi_file
+from .csi_data_file import CSIDataFile
 
 
 def _comma_or_repeatable_paths(values):
@@ -43,12 +44,15 @@ def build_parser():
         "--as-csv", action="store_true", help="Print DataFrame as CSV to stdout (for shell pipes)."
     )
 
-    p_convert = sub.add_parser("convert", help="Convert one file to a different Campbell format.")
+    p_convert = sub.add_parser(
+        "convert",
+        help="Convert one file to a different Campbell format or CSV.",
+    )
     p_convert.add_argument("input", help="Input file path.")
     p_convert.add_argument(
         "--output-format",
         required=True,
-        choices=["TOA5", "TOACI1", "TOB1", "TOB3", "CSIXML"],
+        choices=["TOA5", "TOACI1", "TOB1", "TOB3", "CSIXML", "CSV"],
         help="Target output format.",
     )
     p_convert.add_argument("--output", required=True, help="Output file path.")
@@ -58,7 +62,7 @@ def build_parser():
     p_convert.add_argument(
         "--exists-action",
         choices=["merge", "overwrite", "skip"],
-        default="overwrite",
+        default="merge",
         help="Action to perform when the output file already exists.",
     )
     p_convert.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
@@ -68,25 +72,6 @@ def build_parser():
         default=None,
         help="Maximum worker threads for split-window conversion writes.",
     )
-
-    p_csv = sub.add_parser(
-        "to-csv", help="Read one or more files and export CSV (optionally split by time window)."
-    )
-    p_csv.add_argument(
-        "input", nargs="+", help="One or more input files (space or comma separated)."
-    )
-    p_csv.add_argument("--output", required=True, help="Output csv path or split-file stem.")
-    p_csv.add_argument(
-        "--split-window", default=None, help="Timedelta-like split window, e.g. 1H, 1D, 30min."
-    )
-    p_csv.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
-    p_csv.add_argument(
-        "--max-workers",
-        type=int,
-        default=None,
-        help="Maximum worker threads for split-window CSV writes.",
-    )
-    p_csv.add_argument("--no-sortindex", action="store_true", help="Do not sort DataFrame index.")
 
     return parser
 
@@ -141,18 +126,6 @@ def _cmd_convert(args):
     return 0
 
 
-def _cmd_to_csv(args):
-    paths = _comma_or_repeatable_paths(args.input)
-    reader = CSIDataFile(paths if len(paths) > 1 else paths[0])
-    reader.read(quiet=args.quiet, sortindex=not args.no_sortindex, max_workers=args.max_workers)
-    outputs = reader.to_csv(
-        args.output, split_window=args.split_window, max_workers=args.max_workers
-    )
-    for out in outputs:
-        print(out)
-    return 0
-
-
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -160,7 +133,6 @@ def main(argv=None):
     handlers = {
         "read": _cmd_read,
         "convert": _cmd_convert,
-        "to-csv": _cmd_to_csv,
     }
     handler = handlers.get(args.command)
     if handler is not None:

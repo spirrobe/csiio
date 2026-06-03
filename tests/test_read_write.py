@@ -11,7 +11,7 @@ from csiio import (
     CSIDataFile,
     convert_csi_file,
     read_csi_files,
-    write_csi_toa5,
+    write_csi_ascii,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -180,7 +180,7 @@ class TestCampbellScientificIO(unittest.TestCase):
     def test_read_with_pathlib_path(self):
         """Ensure read_csi_files works with a single pathlib.Path object as input."""
         src = self.tmpdir / "sample_pathlib_single.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
         loaded, _ = read_csi_files(src, asdataframe=True, sortindex=True, quiet=True)
         self.assertEqual(len(loaded), len(self.df))
         self.assertTrue(isinstance(loaded.index, pd.DatetimeIndex))
@@ -192,8 +192,8 @@ class TestCampbellScientificIO(unittest.TestCase):
         """Ensure read_csi_files works with a list of pathlib.Path objects as input."""
         src1 = self.tmpdir / "sample_pathlib_list1.dat"
         src2 = self.tmpdir / "sample_pathlib_list2.dat"
-        write_csi_toa5(str(src1), self.df)
-        write_csi_toa5(str(src2), self.df)
+        write_csi_ascii(str(src1), self.df)
+        write_csi_ascii(str(src2), self.df)
         loaded, _ = read_csi_files([src1, src2], asdataframe=True, sortindex=True, quiet=True)
         self.assertEqual(len(loaded), len(self.df) * 2)
 
@@ -201,14 +201,14 @@ class TestCampbellScientificIO(unittest.TestCase):
         """Ensure read_csi_files works with a mix of Path and str in a list."""
         src1 = self.tmpdir / "sample_pathlib_mixed1.dat"
         src2 = self.tmpdir / "sample_pathlib_mixed2.dat"
-        write_csi_toa5(str(src1), self.df)
-        write_csi_toa5(str(src2), self.df)
+        write_csi_ascii(str(src1), self.df)
+        write_csi_ascii(str(src2), self.df)
         loaded, _ = read_csi_files([src1, str(src2)], asdataframe=True, sortindex=True, quiet=True)
         self.assertEqual(len(loaded), len(self.df) * 2)
 
     def test_write_and_read_toa5(self):
         src = self.tmpdir / "sample_toa5.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         loaded, _ = read_csi_files(
             str(src),
@@ -225,7 +225,7 @@ class TestCampbellScientificIO(unittest.TestCase):
 
     def test_convert_to_tob3_and_read(self):
         src = self.tmpdir / "source.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         out_hint = self.tmpdir / "converted.dat"
         converted_path = Path(convert_csi_file(str(src), str(out_hint), "TOB3", quiet=True))
@@ -256,15 +256,96 @@ class TestCampbellScientificIO(unittest.TestCase):
             check_freq=False,
         )
 
+    def test_read_with_requested_columns_logs_missing_and_preserves_requested(self):
+        src = self.tmpdir / "sample_columns.dat"
+        write_csi_ascii(str(src), self.df)
+
+        with self.assertLogs("csiio.read_csi_files", level="WARNING") as cm:
+            loaded, _ = read_csi_files(
+                str(src),
+                columns=["air_temp (degC)", "missing (x)"],
+                asdataframe=True,
+                sortindex=True,
+                quiet=False,
+            )
+
+        self.assertIn("missing", " ".join(cm.output).lower())
+        self.assertEqual(
+            list(loaded.columns),
+            ["air_temp (degC)", "missing (x)"],
+        )
+        self.assertTrue("missing (x)" in loaded.columns)
+
+    def test_read_with_requested_columns_raises_if_none_present(self):
+        src = self.tmpdir / "sample_columns_missing.dat"
+        write_csi_ascii(str(src), self.df)
+
+        with self.assertRaises(ValueError) as cm:
+            read_csi_files(
+                str(src),
+                columns=["other (x)", "missing (x)"],
+                asdataframe=True,
+                sortindex=True,
+                quiet=False,
+            )
+
+        self.assertIn("none of the requested columns are present", str(cm.exception))
+
+    def test_read_with_multiple_files_logs_missing_and_returns_remaining_data(self):
+        df_a = self.df[["air_temp (degC)"]]
+        df_other = pd.DataFrame(
+            {"other (x)": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
+            index=self.df.index,
+        )
+        src_a = self.tmpdir / "sample_columns_a.dat"
+        src_other = self.tmpdir / "sample_columns_other.dat"
+        write_csi_ascii(str(src_a), df_a)
+        write_csi_ascii(str(src_other), df_other)
+
+        with self.assertLogs("csiio.read_csi_files", level="WARNING") as cm:
+            loaded, _ = read_csi_files(
+                [src_a, src_other],
+                columns=["air_temp (degC)", "co2_flux (umol m-2 s-1)"],
+                asdataframe=True,
+                sortindex=True,
+                quiet=False,
+            )
+
+        self.assertIn("none of the requested columns are present", " ".join(cm.output))
+        self.assertEqual(set(loaded.columns), {"air_temp (degC)", "co2_flux (umol m-2 s-1)"})
+        self.assertEqual(len(loaded), len(df_a) + len(df_other))
+        self.assertTrue(loaded["co2_flux (umol m-2 s-1)"].isna().all())
+        self.assertTrue(loaded["air_temp (degC)"].notna().any())
+
+    def test_read_with_requested_columns_preserves_union_across_multiple_files(self):
+        df_a = self.df[["air_temp (degC)"]]
+        df_b = self.df[["co2_flux (umol m-2 s-1)"]]
+        src1 = self.tmpdir / "sample_columns_a.dat"
+        src2 = self.tmpdir / "sample_columns_b.dat"
+        write_csi_ascii(str(src1), df_a)
+        write_csi_ascii(str(src2), df_b)
+
+        loaded, _ = read_csi_files(
+            [src1, src2],
+            columns=["air_temp (degC)", "co2_flux (umol m-2 s-1)"],
+            asdataframe=True,
+            sortindex=True,
+            quiet=True,
+        )
+
+        self.assertEqual(set(loaded.columns), {"air_temp (degC)", "co2_flux (umol m-2 s-1)"})
+        self.assertTrue(loaded["air_temp (degC)"].isna().any())
+        self.assertTrue(loaded["co2_flux (umol m-2 s-1)"].isna().any())
+
     def test_convert_existing_output_skip_keeps_existing_file(self):
         src = self.tmpdir / "source.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         existing = self.df.copy()
         existing.iloc[0, 0] = 99.9
         existing.iloc[0, 1] = 9.9
         existing_path = self.tmpdir / "existing.dat"
-        write_csi_toa5(str(existing_path), existing)
+        write_csi_ascii(str(existing_path), existing)
 
         returned = convert_csi_file(
             str(src),
@@ -283,7 +364,7 @@ class TestCampbellScientificIO(unittest.TestCase):
 
     def test_convert_existing_output_merge_combines_data(self):
         src = self.tmpdir / "source.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         existing = pd.DataFrame(
             {
@@ -295,7 +376,7 @@ class TestCampbellScientificIO(unittest.TestCase):
             ),
         )
         existing_path = self.tmpdir / "existing_merge.dat"
-        write_csi_toa5(str(existing_path), existing)
+        write_csi_ascii(str(existing_path), existing)
 
         returned = convert_csi_file(
             str(src),
@@ -319,19 +400,52 @@ class TestCampbellScientificIO(unittest.TestCase):
             float(loaded.loc[pd.Timestamp("2024-01-01 03:00:00"), "air_temp (degC)"]), 3.5
         )
 
-    def test_to_csv_split_window(self):
+    def test_write_csv_split_window(self):
         src = self.tmpdir / "source_for_csv.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         reader = CSIDataFile(str(src))
         reader.read(asdataframe=True, quiet=True)
 
-        outputs = reader.to_csv(str(self.tmpdir / "out.csv"), split_window="1H")
+        outputs = reader.write(
+            str(self.tmpdir / "out.csv"),
+            "CSV",
+            split_window="1H",
+            max_workers=1,
+            exists_action="overwrite",
+        )
         self.assertGreaterEqual(len(outputs), 2)
         for output in outputs:
             self.assertTrue(Path(output).exists())
             chunk = pd.read_csv(output)
             self.assertGreater(len(chunk), 0)
+
+    def test_convert_csv_via_write_writes_csv(self):
+        src = self.tmpdir / "source_for_convert_csv.dat"
+        write_csi_ascii(str(src), self.df)
+
+        reader = CSIDataFile(str(src))
+        reader.read(asdataframe=True, quiet=True)
+
+        output = str(self.tmpdir / "converted.csv")
+        returned = reader.write(output, "CSV", quiet=True)
+
+        expected = Path(output).parent / f"CSV_{Path(output).name}"
+        self.assertEqual(Path(returned), expected)
+        self.assertTrue(expected.exists())
+        df = pd.read_csv(expected)
+        self.assertEqual(len(df), len(self.df))
+        self.assertIn("TIMESTAMP", df.columns)
+
+    def test_write_updates_meta_to_requested_output_format(self):
+        reader = CSIDataFile(data=self.df.copy())
+        self.assertEqual(reader.meta[0][0], "TOA5")
+
+        output = str(self.tmpdir / "output.csv")
+        returned = reader.write(output, "CSV", quiet=True)
+
+        self.assertEqual(reader.meta[0][0], "CSV")
+        self.assertTrue(Path(returned).exists())
 
     def test_dataframe_initialization_sorts_by_timestamp(self):
         unsorted = self.df.iloc[[3, 0, 5, 1, 4, 2]].copy()
@@ -342,7 +456,7 @@ class TestCampbellScientificIO(unittest.TestCase):
 
     def test_convert_split_window_writes_timestamped_outputs(self):
         src = self.tmpdir / "source_for_convert.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         outputs = convert_csi_file(
             str(src),
@@ -358,15 +472,15 @@ class TestCampbellScientificIO(unittest.TestCase):
         for output in outputs:
             path = Path(output)
             self.assertTrue(path.exists())
-            self.assertRegex(path.name, r"^TOA5_converted_\d{8}T\d{6}_\d{8}T\d{6}\.dat$")
+            self.assertRegex(path.name, r"^TOA5_converted_\d{8}_\d{6}_\d{8}_\d{6}\.dat$")
             loaded, _ = read_csi_files(str(path), asdataframe=True, sortindex=True, quiet=True)
             self.assertGreater(len(loaded), 0)
 
     def test_convert_csi_file_list_returns_one_output_per_input(self):
         src1 = self.tmpdir / "batch_source_a.dat"
         src2 = self.tmpdir / "batch_source_b.dat"
-        write_csi_toa5(str(src1), self.df)
-        write_csi_toa5(str(src2), self.df)
+        write_csi_ascii(str(src1), self.df)
+        write_csi_ascii(str(src2), self.df)
 
         out_dir = self.tmpdir / "batch_out"
         outputs = convert_csi_file(
@@ -387,8 +501,8 @@ class TestCampbellScientificIO(unittest.TestCase):
     def test_convert_csi_file_list_split_window_flattens_outputs(self):
         src1 = self.tmpdir / "split_source_a.dat"
         src2 = self.tmpdir / "split_source_b.dat"
-        write_csi_toa5(str(src1), self.df)
-        write_csi_toa5(str(src2), self.df)
+        write_csi_ascii(str(src1), self.df)
+        write_csi_ascii(str(src2), self.df)
 
         out_dir = self.tmpdir / "split_batch_out"
         outputs = convert_csi_file(
@@ -403,20 +517,20 @@ class TestCampbellScientificIO(unittest.TestCase):
         for output in outputs:
             path = Path(output)
             self.assertTrue(path.exists())
-            self.assertRegex(path.name, r"^TOA5_split_source_[ab]_\d{8}T\d{6}_\d{8}T\d{6}\.dat$")
+            self.assertRegex(path.name, r"^TOA5_split_source_[ab]_\d{8}_\d{6}_\d{8}_\d{6}\.dat$")
 
     def test_read_many_files_accepts_explicit_max_workers(self):
         src1 = self.tmpdir / "read_many_a.dat"
         src2 = self.tmpdir / "read_many_b.dat"
-        write_csi_toa5(str(src1), self.df)
-        write_csi_toa5(str(src2), self.df)
+        write_csi_ascii(str(src1), self.df)
+        write_csi_ascii(str(src2), self.df)
 
         loaded, _meta = read_csi_files([str(src1), str(src2)], quiet=True, max_workers=1)
         self.assertEqual(len(loaded), len(self.df) * 2)
 
     def test_max_workers_rejects_values_above_cpu_count(self):
         src = self.tmpdir / "max_workers_src.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
         too_high = (os.cpu_count() or 1) + 1
 
         with self.assertRaises(ValueError):
@@ -434,7 +548,7 @@ class TestCampbellScientificIO(unittest.TestCase):
 
     def test_max_workers_rejects_non_int_and_zero(self):
         src = self.tmpdir / "max_workers_invalid_src.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         with self.assertRaises(TypeError):
             read_csi_files([str(src)], quiet=True, max_workers="2")
@@ -445,8 +559,11 @@ class TestCampbellScientificIO(unittest.TestCase):
         reader = CSIDataFile(str(src))
         reader.read(quiet=True)
         with self.assertRaises(ValueError):
-            reader.to_csv(
-                str(self.tmpdir / "invalid_workers.csv"), split_window="1H", max_workers=0
+            reader.write(
+                str(self.tmpdir / "invalid_workers.csv"),
+                "CSV",
+                split_window="1H",
+                max_workers=0,
             )
 
     def test_writer_uses_meta_for_header_defaults_and_allows_overrides(self):
@@ -466,7 +583,7 @@ class TestCampbellScientificIO(unittest.TestCase):
         ]
 
         meta_file = self.tmpdir / "meta_defaults.dat"
-        write_csi_toa5(str(meta_file), self.df, meta=custom_meta)
+        write_csi_ascii(str(meta_file), self.df, meta=custom_meta)
 
         header = meta_file.read_text(encoding="utf-8").splitlines()[0]
         self.assertIn('"station-meta"', header)
@@ -477,7 +594,7 @@ class TestCampbellScientificIO(unittest.TestCase):
         self.assertIn('"table-meta"', header)
 
         override_file = self.tmpdir / "meta_override.dat"
-        write_csi_toa5(
+        write_csi_ascii(
             str(override_file),
             self.df,
             meta=custom_meta,
@@ -490,7 +607,7 @@ class TestCampbellScientificIO(unittest.TestCase):
 
     def test_reader_keeps_normalized_meta_and_per_file_meta(self):
         toa5_path = self.tmpdir / "source_toa5.dat"
-        write_csi_toa5(str(toa5_path), self.df)
+        write_csi_ascii(str(toa5_path), self.df)
 
         tob3_hint = self.tmpdir / "source_tob3.dat"
         tob3_path = Path(convert_csi_file(str(toa5_path), str(tob3_hint), "TOB3", quiet=True))
@@ -546,9 +663,9 @@ class TestCampbellScientificIO(unittest.TestCase):
         }
 
         out_file = self.tmpdir / "normalized_meta_convert.dat"
-        reader.convert(str(out_file), "TOA5", quiet=True)
+        returned = reader.write(str(out_file), "TOA5", quiet=True)
 
-        header = out_file.read_text(encoding="utf-8").splitlines()[0]
+        header = Path(returned).read_text(encoding="utf-8").splitlines()[0]
         self.assertIn('"normalized-station"', header)
         self.assertIn('"normalized-logger"', header)
         self.assertIn('"normalized-program"', header)
@@ -561,19 +678,19 @@ class TestCampbellScientificIO(unittest.TestCase):
         src = self.tmpdir / "concat_source.dat"
         incoming = self.df.copy()
         incoming["only_incoming (x)"] = [20, 21, 22, 23, 24, 25]
-        write_csi_toa5(str(src), incoming)
+        write_csi_ascii(str(src), incoming)
 
         reader = CSIDataFile(paths=[str(src)], data=existing)
         out = reader.read(quiet=True)
 
-        self.assertEqual(len(out), len(existing) + len(incoming))
+        self.assertEqual(len(out), len(existing))
         self.assertIn("only_existing (x)", out.columns)
         self.assertIn("only_incoming (x)", out.columns)
         self.assertListEqual(list(out["RECORD (RN)"].astype(int)), list(range(1, len(out) + 1)))
 
     def test_reader_meta_only_with_existing_data_and_paths_updates_meta(self):
         src = self.tmpdir / "meta_only_with_paths.dat"
-        write_csi_toa5(str(src), self.df)
+        write_csi_ascii(str(src), self.df)
 
         reader = CSIDataFile(paths=[str(src)], data=self.df.copy())
         meta = reader.read(meta_only=True, quiet=True)
@@ -586,30 +703,30 @@ class TestCampbellScientificIO(unittest.TestCase):
         with self.assertRaises(ValueError):
             reader.read(quiet=True)
 
-    def test_reader_convert_without_data_or_paths_raises(self):
+    def test_reader_write_without_data_or_paths_raises(self):
         reader = CSIDataFile()
         with self.assertRaises(ValueError):
-            reader.convert(str(self.tmpdir / "x.dat"), "TOA5", quiet=True)
+            reader.write(str(self.tmpdir / "x.dat"), "TOA5", quiet=True)
 
-    def test_reader_to_csv_without_data_or_paths_raises(self):
+    def test_reader_write_csv_without_data_or_paths_raises(self):
         reader = CSIDataFile()
-        with self.assertRaises(TypeError):
-            reader.to_csv(str(self.tmpdir / "x.csv"))
+        with self.assertRaises(ValueError):
+            reader.write(str(self.tmpdir / "x.csv"), "CSV")
 
-    def test_reader_convert_in_memory_non_dataframe_raises(self):
+    def test_reader_write_in_memory_non_dataframe_raises(self):
         reader = CSIDataFile(data="not-a-dataframe")
         with self.assertRaises(TypeError):
-            reader.convert(str(self.tmpdir / "x.dat"), "TOA5", quiet=True)
+            reader.write(str(self.tmpdir / "x.dat"), "TOA5", quiet=True)
 
-    def test_reader_convert_in_memory_skip_existing_keeps_existing_file(self):
+    def test_reader_write_in_memory_skip_existing_keeps_existing_file(self):
         existing_path = self.tmpdir / "existing_reader.dat"
         existing_df = self.df.copy()
         existing_df.iloc[0, 0] = 99.9
         existing_df.iloc[0, 1] = 9.9
-        write_csi_toa5(str(existing_path), existing_df)
+        write_csi_ascii(str(existing_path), existing_df)
 
         reader = CSIDataFile(data=self.df.copy())
-        returned = reader.convert(str(existing_path), "TOA5", quiet=True, exists_action="skip")
+        returned = reader.write(str(existing_path), "TOA5", quiet=True, exists_action="skip")
 
         self.assertEqual(Path(returned), existing_path)
         loaded, _ = read_csi_files(str(existing_path), quiet=True)
@@ -617,7 +734,7 @@ class TestCampbellScientificIO(unittest.TestCase):
         self.assertEqual(float(loaded.iloc[0]["air_temp (degC)"]), 99.9)
         self.assertEqual(float(loaded.iloc[0]["co2_flux (umol m-2 s-1)"]), 9.9)
 
-    def test_reader_convert_in_memory_merge_existing_file(self):
+    def test_reader_write_in_memory_merge_existing_file(self):
         existing_path = self.tmpdir / "existing_reader_merge.dat"
         existing_df = pd.DataFrame(
             {
@@ -628,10 +745,10 @@ class TestCampbellScientificIO(unittest.TestCase):
                 ["2024-01-01 00:00:00", "2024-01-01 00:30:00", "2024-01-01 03:00:00"]
             ),
         )
-        write_csi_toa5(str(existing_path), existing_df)
+        write_csi_ascii(str(existing_path), existing_df)
 
         reader = CSIDataFile(data=self.df.copy())
-        returned = reader.convert(str(existing_path), "TOA5", quiet=True, exists_action="merge")
+        returned = reader.write(str(existing_path), "TOA5", quiet=True, exists_action="merge")
 
         self.assertEqual(Path(returned), existing_path)
         loaded, _ = read_csi_files(str(existing_path), quiet=True)

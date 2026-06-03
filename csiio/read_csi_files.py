@@ -1,26 +1,30 @@
-import datetime
 import logging
 import os
 import struct
 import xml.etree.ElementTree as ElementTree
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from typing import Any
 
 import pandas as pd
+
+from ._helpers import (
+    BASEDATE,
+    _resolve_parallel_workers,
+    read_csi_formats,
+)
 
 __author__ = "spirrobe"
 
 LOGGER = logging.getLogger(__name__)
 
-BASEDATE = datetime.datetime(
-    year=1990,
-    month=1,
-    day=1,
-    hour=0,
-    second=0,
-    microsecond=0,
-)
+
+def _emit(message, level="info", quiet=False):
+    log_func = getattr(LOGGER, level, LOGGER.info)
+    log_func(message)
+    if quiet and level == "info":
+        return
+    if not LOGGER.hasHandlers():
+        print(message)
+
 
 _DEFAULT_HEADER_VALUES = (
     "TOA5",
@@ -33,31 +37,19 @@ _DEFAULT_HEADER_VALUES = (
 )
 
 
-def _resolve_parallel_workers(task_count, max_workers=None):
-    if task_count <= 0:
-        return 1
-    cpu_count = os.cpu_count() or 1
+def _normalize_requested_columns(columns):
+    if columns is None:
+        return None
+    if isinstance(columns, str | bytes):
+        return [columns]
+    if hasattr(columns, "__iter__"):
+        columns_list = list(columns)
+    else:
+        raise TypeError("columns must be a string or sequence of strings")
 
-    if max_workers is not None:
-        if not isinstance(max_workers, int):
-            raise TypeError("max_workers must be an integer")
-        if max_workers < 1:
-            raise ValueError("max_workers must be >= 1")
-        if max_workers > cpu_count:
-            raise ValueError(f"max_workers must be <= available CPU count ({cpu_count})")
-        return min(max_workers, task_count)
-
-    default_workers = max(1, cpu_count // 4)
-    return max(1, min(default_workers, task_count))
-
-
-def _emit(message, level="info", quiet=False):
-    log_func = getattr(LOGGER, level, LOGGER.info)
-    log_func(message)
-    if quiet and level == "info":
-        return
-    if not LOGGER.hasHandlers():
-        print(message)
+    if not all(isinstance(col, str | bytes) for col in columns_list):
+        raise TypeError("columns must be a string or sequence of strings")
+    return [str(col) for col in columns_list]
 
 
 def fp22float(fp2integer):
@@ -118,40 +110,6 @@ def _coerce_timestamp_index(values):
         parsed.loc[missing] = pd.to_datetime(pd.Series(values)[missing], errors="coerce")
 
     return pd.DatetimeIndex(parsed)
-
-
-def read_csi_formats(csformat):
-    pyformat = []
-    knownformats = {
-        "FP2": ">H",
-        "IEEE4": "f",
-        "IEEE4B": ">f",
-        "UINT2": ">H",
-        "INT4": ">i",
-        "UINT4": ">L",
-        "String": "s",
-        "Boolean": "?",
-        "Bool8": "8?",
-        "Bool4": "4?",
-        "LONG": "l",
-        "ULONG": "=L",
-    }
-    for fmt in csformat:
-        if fmt.startswith("ASCII"):
-            n_string = fmt.replace(")", "").split("(")
-            pyformat.append(n_string[1] + "s")
-        elif fmt in knownformats:
-            pyformat.append(knownformats[fmt])
-        else:
-            _emit(
-                "Warning: The format code " + fmt + " is not known \n"
-                "please adapt the known formats (a dictionary) "
-                "using the correct identifier from "
-                "https://docs.python.org/3/library/struct.html",
-                level="warning",
-            )
-
-    return pyformat
 
 
 def _data_to_dataframe(data, meta, filetype, sortindex=True):
@@ -276,6 +234,8 @@ def _read_csi_files_impl(
     sortindex=True,
     collect_file_meta=False,
     max_workers=None,
+    columns=None,
+    _raise_if_no_columns=True,
     **kwargs,
 ):
     # Backward compatibility: ignore legacy non-DataFrame flags.
@@ -289,6 +249,10 @@ def _read_csi_files_impl(
         worker_count = _resolve_parallel_workers(len(filename), max_workers=max_workers)
 
         def _read_single_file(file):
+            if isinstance(filename, list) and len(filename) > 1:
+                raise_if_no_columns = False
+            else:
+                raise_if_no_columns = _raise_if_no_columns
             return _read_csi_files_impl(
                 file,
                 meta_only=meta_only,
@@ -296,6 +260,8 @@ def _read_csi_files_impl(
                 sortindex=sortindex,
                 collect_file_meta=collect_file_meta,
                 max_workers=max_workers,
+                columns=columns,
+                _raise_if_no_columns=raise_if_no_columns,
                 **kwargs,
             )
 
@@ -373,11 +339,13 @@ def _read_csi_files_impl(
             return meta
 
         if not quiet:
-            _emit("Reading the file " + filename, quiet=quiet)
+            _emit("Reading the file " + str(filename), quiet=quiet)
+
+        requested_columns = _normalize_requested_columns(columns)
 
         if filetype in ["TOA5", "TOB1", "TOACI1", "TOB3", "CSIXML"]:
             if not quiet:
-                _emit(filename + " is a " + filetype + "-File", quiet=quiet)
+                _emit(str(filename) + " is a " + filetype + "-File", quiet=quiet)
             if filetype in ["TOA5", "TOACI1"]:
                 data = read_csi_toa5(file_obj, meta, **kwargs)
 
@@ -400,6 +368,22 @@ def _read_csi_files_impl(
 
             elif filetype == "CSIXML":
                 data = read_csi_csixml(file_obj, meta, **kwargs)
+            if requested_columns is not None and data is not False:
+                present_columns = [col for col in requested_columns if col in data.columns]
+                missing_columns = [col for col in requested_columns if col not in data.columns]
+                if not present_columns:
+                    message = f"{filename}: none of the requested columns are present: {requested_columns}"
+                    if _raise_if_no_columns:
+                        raise ValueError(message)
+                    _emit(message, level="warning", quiet=quiet)
+                elif missing_columns:
+                    _emit(
+                        f"{filename}: requested columns not all present. present={present_columns}, missing={missing_columns}. Remaining data will still be returned.",
+                        level="warning",
+                        quiet=quiet,
+                    )
+                data = data.reindex(columns=requested_columns)
+
             if collect_file_meta:
                 return data, meta, per_file_meta
             return data, meta
@@ -410,274 +394,14 @@ def _read_csi_files_impl(
             return False, False
 
 
-@dataclass
-class CSIDataFile:
-    """Stateful reader/writer wrapper around Campbell Scientific data files.
-
-    Usage:
-        one = CSIDataFile('/path/to/file.dat')
-        df = one.read()
-        one.to_csv('/tmp/out.csv')
-
-        many = CSIDataFile(['/path/a.dat', '/path/b.dat'])
-        df_all = many.read()
-        many.to_csv('/tmp/out.csv', split_window='1H')
-
-        # Initialize from DataFrame:
-        df = pd.DataFrame({'value': [1, 2, 3]},
-                          index=pd.date_range('2020-01-01', periods=3))
-        csdf = CSIDataFile(data=df)
-        csdf.to_csv('/tmp/out.csv')
-    """
-
-    paths: Any = None
-    data: Any = None
-    meta: Any = None
-    file_meta: Any = None
-
-    def __post_init__(self):
-        if self.file_meta is None:
-            self.file_meta = {}
-
-        # Handle data parameter (DataFrame initialization)
-        if isinstance(self.data, pd.DataFrame):
-            self.data = self._normalize_dataframe(self.data)
-            self.meta = self._meta_from_dataframe(self.data)
-            self.file_meta = {}
-            # Paths are optional when data is provided
-            if self.paths is None:
-                self.paths = []
-            elif isinstance(self.paths, list | tuple):
-                self.paths = [str(p).strip() for p in self.paths]
-            else:
-                self.paths = [str(self.paths).strip()]
-            return
-
-        # Handle paths parameter (file-based initialization)
-        if self.paths is None:
-            self.paths = []
-            return
-        if isinstance(self.paths, list | tuple):
-            self.paths = [str(p).strip() for p in self.paths]
-        else:
-            self.paths = [str(self.paths).strip()]
-
-    def _normalize_dataframe(self, df):
-        """Ensure DataFrame has TIMESTAMP index and RECORD column (auto-generated if missing)."""
-        result = df.copy()
-
-        # Ensure datetime index
-        if not isinstance(result.index, pd.DatetimeIndex):
-            result.index = pd.to_datetime(result.index)
-        result.index.name = "TIMESTAMP"
-        result = result.sort_index()
-
-        # Ensure RECORD column exists
-        if "RECORD (RN)" not in result.columns:
-            result.insert(0, "RECORD (RN)", range(1, len(result) + 1))
-
-        return result
-
-    def _meta_from_dataframe(self, df):
-        """Build a TOA5-compatible meta structure from a normalized DataFrame."""
-        names = ["TIMESTAMP", "RECORD"] + [
-            _split_name_and_unit(c)[0] for c in df.columns if c != "RECORD (RN)"
-        ]
-        units = ["TS", "RN"] + [
-            _split_name_and_unit(c)[1] for c in df.columns if c != "RECORD (RN)"
-        ]
-        process = ["", ""] + ["Smp"] * (len(names) - 2)
-        return [
-            ["TOA5", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"],
-            names,
-            units,
-            process,
-        ]
-
-    def _concatenate_dataframes(self, existing, new):
-        """Concatenate two DataFrames with column alignment."""
-        if existing is None:
-            return new
-
-        # Align columns: add missing columns with NaN
-        all_cols = set(existing.columns) | set(new.columns)
-        for col in all_cols:
-            if col not in existing.columns:
-                existing[col] = pd.NA
-            if col not in new.columns:
-                new[col] = pd.NA
-
-        # Re-generate RECORD column after concatenation
-        combined = pd.concat([existing, new]).sort_index()
-        combined["RECORD (RN)"] = range(1, len(combined) + 1)
-
-        return combined
-
-    def read(self, meta_only=False, quiet=True, sortindex=True, max_workers=None, **kwargs):
-        # If data already exists and no paths provided, return stored data
-        if not self.paths and self.data is not None:
-            return self.data
-
-        # If data already exists and paths are provided, load and concatenate
-        if self.data is not None and self.paths:
-            input_path = self.paths if len(self.paths) > 1 else self.paths[0]
-            result = _read_csi_files_impl(
-                input_path,
-                meta_only=meta_only,
-                quiet=quiet,
-                sortindex=sortindex,
-                collect_file_meta=True,
-                max_workers=max_workers,
-                **kwargs,
-            )
-            if meta_only:
-                normalized_meta, new_file_meta = result
-                self.file_meta.update(new_file_meta)
-                self.meta = _normalized_meta_from_file_meta(self.file_meta)
-                return self.meta
-
-            new_data, _new_meta, new_file_meta = result
-            self.file_meta.update(new_file_meta)
-
-            self.data = self._concatenate_dataframes(self.data, new_data)
-            self.meta = _normalized_meta_from_file_meta(self.file_meta)
-            return self.data
-
-        # If no data exists yet, load from files
-        if not self.paths:
-            raise ValueError(
-                "No input path or data configured. Set CSIDataFile.paths, pass data, or set CSIDataFile.data."
-            )
-
-        input_path = self.paths if len(self.paths) > 1 else self.paths[0]
-
-        result = _read_csi_files_impl(
-            input_path,
-            meta_only=meta_only,
-            quiet=quiet,
-            sortindex=sortindex,
-            collect_file_meta=True,
-            max_workers=max_workers,
-            **kwargs,
-        )
-
-        if meta_only:
-            _raw_meta, file_meta = result
-            self.file_meta = file_meta
-            self.meta = _normalized_meta_from_file_meta(self.file_meta)
-            return self.meta
-
-        data, _raw_meta, file_meta = result
-        self.file_meta = file_meta
-        self.data = data
-        self.meta = _normalized_meta_from_file_meta(self.file_meta)
-
-        return self.data
-
-    def convert(
-        self, output_file, output_format, quiet=True, max_workers=None, exists_action="overwrite"
-    ):
-        writer_meta = self.meta
-
-        # Support conversion from in-memory DataFrame
-        if self.data is not None and not self.paths:
-            if not isinstance(self.data, pd.DataFrame):
-                raise TypeError("CSIDataFile.convert requires DataFrame data. Call read().")
-            data = self.data
-            if os.path.exists(output_file):
-                if exists_action == "skip":
-                    return output_file
-                if exists_action == "merge":
-                    if not _is_csi_file(output_file):
-                        raise ValueError(
-                            f"Cannot merge existing output because '{output_file}' is not a CSI file"
-                        )
-                    existing, _ = read_csi_files(output_file, quiet=quiet)
-                    data = _merge_dataframes(existing, data)
-                elif exists_action != "overwrite":
-                    raise ValueError("exists_action must be 'merge', 'overwrite', or 'skip'")
-            if output_format.upper() in ["TOA5", "TOACI1"]:
-                write_csi_toa5(output_file, data, filetype=output_format.upper(), meta=writer_meta)
-            elif output_format.upper() == "TOB1":
-                write_csi_tob1(output_file, data, meta=writer_meta)
-            elif output_format.upper() == "TOB3":
-                write_csi_tob3(output_file, data, meta=writer_meta)
-            elif output_format.upper() == "CSIXML":
-                write_csi_csixml(output_file, data, meta=writer_meta)
-            else:
-                raise ValueError(f"Unknown output format: {output_format}")
-            return output_file
-
-        if not self.paths:
-            raise ValueError(
-                "No input path or data configured. Set CSIDataFile.paths or pass data during initialization."
-            )
-
-        if len(self.paths) == 1:
-            return _convert_csi_file_impl(
-                self.paths[0],
-                output_file,
-                output_format,
-                quiet=quiet,
-                max_workers=max_workers,
-                exists_action=exists_action,
-            )
-        return convert_csi_file(
-            self.paths,
-            output_file,
-            output_format,
-            quiet=quiet,
-            max_workers=max_workers,
-            exists_action=exists_action,
-        )
-
-    def to_csv(
-        self, output_file, split_window=None, index_label="TIMESTAMP", max_workers=None, **kwargs
-    ):
-        if self.data is None:
-            # Try to load from paths if available
-            if self.paths:
-                self.read()
-            else:
-                raise TypeError(
-                    "No data loaded for CSV export. Set CSIDataFile.data or call read()."
-                )
-
-        if self.data is None:
-            raise TypeError("No data loaded for CSV export.")
-
-        dataframe = self.data.copy() if isinstance(self.data, pd.DataFrame) else self.data
-        if not isinstance(dataframe, pd.DataFrame):
-            raise TypeError("CSIDataFile.to_csv requires DataFrame data. Call read().")
-
-        dataframe = _ensure_datetime_index(dataframe).sort_index()
-
-        if split_window is None:
-            dataframe.to_csv(output_file, index_label=index_label, **kwargs)
-            return [output_file]
-
-        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        chunk_tasks = []
-        for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, split_window):
-            outfile = _timestamped_output_path(output_file, start_ts, end_ts)
-            chunk_tasks.append((chunk, outfile))
-
-        worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
-
-        def _write_csv_chunk(task):
-            chunk, outfile = task
-            chunk.to_csv(outfile, index_label=index_label, **kwargs)
-            return outfile
-
-        if worker_count == 1:
-            return [_write_csv_chunk(task) for task in chunk_tasks]
-
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            return list(executor.map(_write_csv_chunk, chunk_tasks))
-
-
 def read_csi_files(
-    filename, meta_only=False, quiet=True, sortindex=True, max_workers=None, **kwargs
+    filename,
+    meta_only=False,
+    quiet=True,
+    sortindex=True,
+    max_workers=None,
+    columns=None,
+    **kwargs,
 ):
     return _read_csi_files_impl(
         filename,
@@ -685,6 +409,7 @@ def read_csi_files(
         quiet=quiet,
         sortindex=sortindex,
         max_workers=max_workers,
+        columns=columns,
         **kwargs,
     )
 
@@ -1119,562 +844,6 @@ def read_csi_tob3(
     rec_df["RECORD (RN)"] = pd.to_numeric(rec_df["RECORD (RN)"], errors="coerce").astype("Int64")
 
     return rec_df
-
-
-def _split_name_and_unit(label):
-    if isinstance(label, str) and label.endswith(")") and " (" in label:
-        name, unit = label.rsplit(" (", 1)
-        return name, unit[:-1]
-    return str(label), ""
-
-
-def _ensure_datetime_index(dataframe):
-    if not isinstance(dataframe.index, pd.DatetimeIndex):
-        dataframe.index = pd.to_datetime(dataframe.index)
-    return dataframe
-
-
-def _is_csi_file(filepath):
-    try:
-        with open(filepath, "rb") as fh:
-            firstline = fh.readline().rstrip().decode("utf-8", errors="ignore").strip()
-    except OSError:
-        return False
-
-    if not firstline:
-        return False
-
-    first_token = firstline.split(",", 1)[0].replace('"', "").upper()
-    return first_token in {"TOA5", "TOB1", "TOB3", "TOACI1"} or first_token.startswith("<?XML")
-
-
-def _merge_dataframes(existing, new):
-    existing = _ensure_datetime_index(existing)
-    new = _ensure_datetime_index(new)
-    combined = pd.concat([existing, new])
-    combined = combined[~combined.index.duplicated(keep="last")]
-    return combined.sort_index()
-
-
-def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=True):
-    exists_action = str(exists_action).lower()
-    if exists_action not in {"merge", "overwrite", "skip"}:
-        raise ValueError("exists_action must be 'merge', 'overwrite', or 'skip'")
-
-    if not os.path.exists(output_file):
-        return dataframe
-
-    if exists_action == "skip":
-        return None
-
-    if exists_action == "overwrite":
-        return dataframe
-
-    if not _is_csi_file(output_file):
-        raise ValueError(f"Cannot merge existing output because '{output_file}' is not a CSI file")
-
-    existing, _ = read_csi_files(output_file, quiet=quiet)
-    return _merge_dataframes(existing, dataframe)
-
-
-def _resolve_split_group_freq(split_window):
-    if isinstance(split_window, str):
-        normalized_window = split_window.strip().lower()
-        window_delta = pd.to_timedelta(normalized_window)
-        if window_delta <= pd.Timedelta(0):
-            raise ValueError("split_window must be > 0")
-        return window_delta
-
-    if isinstance(split_window, pd.Timedelta):
-        if split_window <= pd.Timedelta(0):
-            raise ValueError("split_window must be > 0")
-
-    return split_window
-
-
-def _timestamped_output_path(output_file, start_ts, end_ts):
-    stem, ext = os.path.splitext(output_file)
-    ext = ext or ".dat"
-    start_str = pd.Timestamp(start_ts).strftime("%Y%m%dT%H%M%S")
-    end_str = pd.Timestamp(end_ts).strftime("%Y%m%dT%H%M%S")
-    return f"{stem}_{start_str}_{end_str}{ext}"
-
-
-def _resolve_meta_header_value(meta, row_index, col_index, current_value):
-    if meta and len(meta) > row_index and len(meta[row_index]) > col_index:
-        meta_value = meta[row_index][col_index]
-        if meta_value not in (None, "") and current_value == _DEFAULT_HEADER_VALUES[col_index]:
-            return meta_value
-    return current_value
-
-
-def _resolve_meta_process_values(meta, current_value, field_count):
-    if current_value != "Smp":
-        return [current_value] * field_count
-
-    if meta and len(meta) > 3:
-        process_values = [value if value not in (None, "") else current_value for value in meta[3]]
-        if len(process_values) < field_count:
-            process_values.extend([current_value] * (field_count - len(process_values)))
-        return process_values[:field_count]
-
-    return [current_value] * field_count
-
-
-def _iter_split_chunks(dataframe, split_window):
-    group_freq = _resolve_split_group_freq(split_window)
-    grouped = dataframe.groupby(pd.Grouper(freq=group_freq))
-    for _, chunk in grouped:
-        if chunk.empty:
-            continue
-        yield chunk, chunk.index.min(), chunk.index.max()
-
-
-def _prepare_export_dataframe(dataframe):
-    export_df = dataframe.copy()
-    export_df = _ensure_datetime_index(export_df)
-    if "RECORD (RN)" not in export_df.columns:
-        export_df.insert(0, "RECORD (RN)", range(1, len(export_df) + 1))
-    return export_df
-
-
-def _normalize_output_path(output_file, output_format):
-    outdir = os.path.dirname(output_file)
-    base = os.path.basename(output_file)
-    stem, _ = os.path.splitext(base)
-    prefix = output_format.upper() + "_"
-    if not stem.upper().startswith(prefix):
-        stem = prefix + stem
-    return os.path.join(outdir, stem + ".dat")
-
-
-def _infer_struct_format(series, tob3=False):
-    non_null = series.dropna()
-    if non_null.empty:
-        if pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series):
-            return "ASCII(1)"
-        return "IEEE4B" if tob3 else "IEEE4"
-
-    if pd.api.types.is_bool_dtype(non_null):
-        return "Boolean"
-
-    if pd.api.types.is_integer_dtype(non_null):
-        minv, maxv = int(non_null.min()), int(non_null.max())
-        if minv >= 0:
-            if maxv <= 2**16 - 1:
-                return "UINT2"
-            return "UINT4"
-        return "INT4"
-
-    numeric_values = pd.to_numeric(non_null, errors="coerce")
-    if numeric_values.notna().all():
-        return "IEEE4B" if tob3 else "IEEE4"
-
-    if pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series):
-        max_length = max(len(str(value).encode("utf-8")) for value in non_null)
-        return f"ASCII({max(1, max_length)})"
-
-    return "IEEE4B" if tob3 else "IEEE4"
-
-
-def _pack_value(fmt, value):
-    if pd.isna(value):
-        if fmt.endswith("s"):
-            n = int(fmt[:-1])
-            return b"\x00" * n
-        if fmt in ["?", "4?", "8?"]:
-            value = False
-        elif fmt[-1] in ["H", "L", "I", "l", "i"]:
-            value = 0
-        else:
-            value = float("nan")
-
-    if fmt.endswith("s"):
-        n = int(fmt[:-1])
-        txt = str(value).encode("utf-8")[:n]
-        txt = txt + b"\x00" * max(0, n - len(txt))
-        return struct.pack(fmt, txt)
-
-    if fmt in ["?", "4?", "8?"]:
-        return struct.pack(fmt, bool(value))
-
-    if fmt[-1] in ["H", "L", "I", "l", "i"]:
-        return struct.pack(fmt, int(value))
-
-    return struct.pack(fmt, float(value))
-
-
-def write_csi_toa5(
-    outfile,
-    dataframe,
-    filetype="TOA5",
-    station="converted",
-    logger="converted",
-    serial="converted",
-    osversion="converted",
-    program="converted",
-    table="converted",
-    meta=None,
-):
-    if filetype not in ["TOA5", "TOACI1"]:
-        raise ValueError("filetype must be TOA5 or TOACI1")
-
-    export_df = _prepare_export_dataframe(dataframe)
-
-    station = _resolve_meta_header_value(meta, 0, 1, station)
-    logger = _resolve_meta_header_value(meta, 0, 2, logger)
-    serial = _resolve_meta_header_value(meta, 0, 3, serial)
-    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
-    program = _resolve_meta_header_value(meta, 0, 5, program)
-    table = _resolve_meta_header_value(meta, 0, 6, table)
-
-    raw_names = ["TIMESTAMP"] + list(export_df.columns)
-    names, units = zip(*[_split_name_and_unit(col) for col in raw_names], strict=False)
-
-    names_line = ",".join(f'"{name}"' for name in names)
-    units_line = ",".join(f'"{unit}"' for unit in units)
-    sampled_as_line = ",".join('""' for _ in names)
-
-    header = [
-        f'"{filetype}","{station}","{logger}","{serial}","{osversion}","{program}","{table}"',
-        names_line,
-        units_line,
-    ]
-
-    if filetype == "TOA5":
-        header.append(sampled_as_line)
-
-    with open(outfile, "w", encoding="utf-8") as fobj:
-        fobj.write("\n".join(header) + "\n")
-
-    write_df = export_df.copy()
-    write_df.index = write_df.index.strftime("%Y-%m-%d %H:%M:%S.%f").str.rstrip("0").str.rstrip(".")
-    write_df.to_csv(
-        outfile,
-        mode="a",
-        header=False,
-        index=True,
-        float_format="%.6g",
-        escapechar="\\",
-    )
-
-
-def write_csi_csixml(outfile, dataframe, process="Smp", meta=None):
-    from xml.sax.saxutils import escape
-
-    def _xml_safe_text(value):
-        if pd.isna(value):
-            return ""
-        text = str(value).replace("\x00", "")
-        # Keep XML content single-line and remove disallowed control chars.
-        text = text.replace("\r", "").replace("\n", "")
-        text = "".join(ch for ch in text if ch == "\t" or ord(ch) >= 0x20)
-        return text
-
-    def _xml_field_type(series):
-        numeric = pd.to_numeric(series.dropna(), errors="coerce")
-        return "xsd:float" if numeric.notna().all() else "xsd:string"
-
-    export_df = _prepare_export_dataframe(dataframe)
-    payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
-    split_names = [_split_name_and_unit(col) for col in payload_cols]
-    process_values = _resolve_meta_process_values(meta, process, len(payload_cols))
-
-    lines = [
-        '<?xml version="1.0" encoding="utf-8"?>',
-        '<csixml version="1.0">',
-        "  <head>",
-        "    <fields>",
-    ]
-
-    for (name, unit), source_col, field_process in zip(
-        split_names, payload_cols, process_values, strict=False
-    ):
-        dtype = _xml_field_type(export_df[source_col])
-        lines.append(
-            f'      <field name="{escape(str(name))}" process="{escape(str(field_process))}" type="{dtype}" units="{escape(str(unit))}" />'
-        )
-
-    lines.extend(
-        [
-            "    </fields>",
-            "  </head>",
-            "  <data>",
-        ]
-    )
-
-    for timestamp, row in export_df.iterrows():
-        recno = int(row["RECORD (RN)"]) if "RECORD (RN)" in row else 0
-        ts = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f").rstrip("0").rstrip(".")
-        lines.append(f'    <r time="{ts}" no="{recno}">')
-        for idx, col in enumerate(payload_cols, start=1):
-            value = row[col]
-            text = escape(_xml_safe_text(value))
-            lines.append(f"      <v{idx}>{text}</v{idx}>")
-        lines.append("    </r>")
-
-    lines.extend(
-        [
-            "  </data>",
-            "</csixml>",
-        ]
-    )
-
-    with open(outfile, "w", encoding="utf-8") as fobj:
-        fobj.write("\n".join(lines) + "\n")
-
-
-def write_csi_tob1(
-    outfile,
-    dataframe,
-    station="converted",
-    logger="CR1000X",
-    serial="0",
-    osversion="CR1000X.Std",
-    program="converted",
-    table="table",
-    meta=None,
-):
-    export_df = _prepare_export_dataframe(dataframe).sort_index()
-
-    station = _resolve_meta_header_value(meta, 0, 1, station)
-    logger = _resolve_meta_header_value(meta, 0, 2, logger)
-    serial = _resolve_meta_header_value(meta, 0, 3, serial)
-    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
-    program = _resolve_meta_header_value(meta, 0, 5, program)
-    table = _resolve_meta_header_value(meta, 0, 6, table)
-
-    payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
-    payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
-    payload_names = [name for name, _ in payload_names_units]
-    payload_units = [unit for _, unit in payload_names_units]
-
-    payload_formats = [_infer_struct_format(export_df[c], tob3=False) for c in payload_cols]
-    pyformats = read_csi_formats(["ULONG", "ULONG", "ULONG"] + payload_formats)
-
-    header = [
-        f'"TOB1","{station}","{logger}","{serial}","{osversion}","CPU:{program}","0","{table}"',
-        ",".join(f'"{x}"' for x in (["SECONDS", "NANOSECONDS", "RECORD"] + payload_names)),
-        ",".join(f'"{x}"' for x in (["SECONDS", "NANOSECONDS", "RN"] + payload_units)),
-        ",".join('""' for _ in ["SECONDS", "NANOSECONDS", "RECORD"])
-        + ("," if payload_names else "")
-        + ",".join('"Smp"' for _ in payload_names),
-        ",".join(f'"{x}"' for x in (["ULONG", "ULONG", "ULONG"] + payload_formats)),
-    ]
-
-    with open(outfile, "wb") as fobj:
-        fobj.write(("\n".join(header) + "\n").encode("utf-8"))
-
-        basedate_ts = pd.Timestamp(BASEDATE)
-        for ts, row in export_df.iterrows():
-            delta = ts - basedate_ts
-            total_ns = int(delta.total_seconds() * 1_000_000_000)
-            seconds = total_ns // 1_000_000_000
-            nanoseconds = total_ns % 1_000_000_000
-            record = int(row["RECORD (RN)"])
-
-            values = [seconds, nanoseconds, record] + [row[c] for c in payload_cols]
-            for fmt, value in zip(pyformats, values, strict=False):
-                fobj.write(_pack_value(fmt, value))
-
-
-def write_csi_tob3(
-    outfile,
-    dataframe,
-    station="converted",
-    logger="CR3000",
-    serial="0",
-    osversion="CR3000.Std",
-    program="converted",
-    table="table",
-    meta=None,
-):
-    export_df = _prepare_export_dataframe(dataframe).sort_index()
-
-    station = _resolve_meta_header_value(meta, 0, 1, station)
-    logger = _resolve_meta_header_value(meta, 0, 2, logger)
-    serial = _resolve_meta_header_value(meta, 0, 3, serial)
-    osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
-    program = _resolve_meta_header_value(meta, 0, 5, program)
-    table = _resolve_meta_header_value(meta, 0, 6, table)
-
-    payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
-    payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
-    payload_names = [name for name, _ in payload_names_units]
-    payload_units = [unit for _, unit in payload_names_units]
-
-    payload_formats = [_infer_struct_format(export_df[c], tob3=True) for c in payload_cols]
-    pyformats = read_csi_formats(payload_formats)
-
-    fhdrformats = ["L", "l", "i", "I"]
-    hdrformat = "L"
-    for _ in fhdrformats:
-        if struct.Struct(3 * _).size == 12:
-            hdrformat = _
-    fhdr, ffoot = 3 * hdrformat, "HH"
-
-    subrecsizes = sum(struct.Struct(fmt).size for fmt in pyformats)
-    n_rec_frame = 1
-    framesize = struct.Struct(fhdr + ffoot).size + subrecsizes * n_rec_frame
-    validation = 60288
-
-    header = [
-        f'"TOB3","{station}","{logger}","{serial}","{osversion}","CPU:{program}","0","{table}"',
-        f'"{table}","1 SEC","{framesize}","{len(export_df)}","{validation}","Sec1Usec","0","0","0"',
-        ",".join(f'"{x}"' for x in payload_names),
-        ",".join(f'"{x}"' for x in payload_units),
-        ",".join('"Smp"' for _ in payload_names),
-        ",".join(f'"{x}"' for x in payload_formats),
-    ]
-
-    with open(outfile, "wb") as fobj:
-        fobj.write(("\n".join(header) + "\n").encode("utf-8"))
-
-        basedate_ts = pd.Timestamp(BASEDATE)
-        for ts, row in export_df.iterrows():
-            delta = ts - basedate_ts
-            total_us = int(delta.total_seconds() * 1_000_000)
-            seconds = total_us // 1_000_000
-            subsec = total_us % 1_000_000
-            record = int(row["RECORD (RN)"])
-
-            fobj.write(struct.pack(fhdr, seconds, subsec, record))
-            for fmt, col in zip(pyformats, payload_cols, strict=False):
-                fobj.write(_pack_value(fmt, row[col]))
-            fobj.write(struct.pack(ffoot, 0, validation))
-
-
-def _convert_csi_file_impl(
-    input_file,
-    output_file,
-    output_format,
-    quiet=True,
-    split_window=None,
-    max_workers=None,
-    exists_action="overwrite",
-):
-    output_format = output_format.upper()
-    original_output_file = output_file
-    normalized_output_file = _normalize_output_path(output_file, output_format)
-    if os.path.exists(original_output_file):
-        output_file = original_output_file
-    elif os.path.exists(normalized_output_file):
-        output_file = normalized_output_file
-    else:
-        output_file = normalized_output_file
-
-    data, _raw_meta, file_meta = _read_csi_files_impl(
-        input_file,
-        quiet=quiet,
-        sortindex=True,
-        collect_file_meta=True,
-        max_workers=max_workers,
-    )
-    meta = _normalized_meta_from_file_meta(file_meta)
-
-    if split_window is not None:
-        dataframe = _ensure_datetime_index(data).sort_index()
-        group_freq = _resolve_split_group_freq(split_window)
-        os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-        chunk_tasks = []
-        for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, group_freq):
-            outfile = _timestamped_output_path(
-                output_file, start_ts.floor(group_freq), end_ts.ceil(group_freq)
-            )
-            chunk_tasks.append((chunk, outfile))
-
-        worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
-
-        def _write_split_chunk(task):
-            chunk, outfile = task
-            if exists_action == "skip" and os.path.exists(outfile):
-                return outfile
-            if exists_action == "merge" and os.path.exists(outfile):
-                if not _is_csi_file(outfile):
-                    raise ValueError(
-                        f"Cannot merge existing output because '{outfile}' is not a CSI file"
-                    )
-                existing, _ = read_csi_files(outfile, quiet=quiet)
-                chunk = _merge_dataframes(existing, chunk)
-
-            if output_format in ["TOA5", "TOACI1"]:
-                write_csi_toa5(outfile, chunk, filetype=output_format, meta=meta)
-            elif output_format == "TOB1":
-                write_csi_tob1(outfile, chunk, meta=meta)
-            elif output_format == "TOB3":
-                write_csi_tob3(outfile, chunk, meta=meta)
-            elif output_format == "CSIXML":
-                write_csi_csixml(outfile, chunk, meta=meta)
-            else:
-                raise ValueError(f"Unknown output format: {output_format}")
-            return outfile
-
-        if worker_count == 1:
-            return [_write_split_chunk(task) for task in chunk_tasks]
-
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            return list(executor.map(_write_split_chunk, chunk_tasks))
-
-    data = _prepare_output_for_existing(output_file, data, exists_action, quiet=quiet)
-    if data is None:
-        return output_file
-
-    if output_format in ["TOA5", "TOACI1"]:
-        write_csi_toa5(output_file, data, filetype=output_format, meta=meta)
-    elif output_format == "TOB1":
-        write_csi_tob1(output_file, data, meta=meta)
-    elif output_format == "TOB3":
-        write_csi_tob3(output_file, data, meta=meta)
-    elif output_format == "CSIXML":
-        write_csi_csixml(output_file, data, meta=meta)
-    else:
-        raise ValueError(f"Unknown output format: {output_format}")
-
-    return output_file
-
-
-def convert_csi_file(
-    input_file,
-    output_file,
-    output_format,
-    quiet=True,
-    split_window=None,
-    max_workers=None,
-    exists_action="overwrite",
-):
-    if isinstance(input_file, list | tuple):
-        _resolve_parallel_workers(len(input_file), max_workers=max_workers)
-        os.makedirs(output_file, exist_ok=True)
-        outputs = []
-        output_format = output_format.upper()
-        for one_input in input_file:
-            basename = os.path.basename(one_input)
-            stem, _ = os.path.splitext(basename)
-            outfile = os.path.join(output_file, f"{output_format}_{stem}.dat")
-            converted = _convert_csi_file_impl(
-                one_input,
-                outfile,
-                output_format,
-                quiet=quiet,
-                split_window=split_window,
-                max_workers=max_workers,
-                exists_action=exists_action,
-            )
-            if isinstance(converted, list):
-                outputs.extend(converted)
-            else:
-                outputs.append(converted)
-        return outputs
-
-    return _convert_csi_file_impl(
-        input_file,
-        output_file,
-        output_format,
-        quiet=quiet,
-        split_window=split_window,
-        max_workers=max_workers,
-        exists_action=exists_action,
-    )
 
 
 if __name__ == "__main__":
