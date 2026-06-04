@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-04
+
+### Changed
+- Exposed `line_terminator` through `convert_csi_file()`, `CSIDataFile.write()`, and `csiio convert --line-terminator`.
+- Updated docs and added public API tests for line terminator customization and split-window `closed`/`label` behavior.
+
 ## [0.3.3] - 2026-06-04
 
 ### Changed

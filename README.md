@@ -50,6 +50,7 @@ converted_merge = convert_csi_file(
     "/tmp/TOA5_out.dat",
     "TOA5",
     exists_action="merge",
+    line_terminator="\n",
 )
 split_outputs = convert_csi_file(
     "/path/to/in.dat",
@@ -86,6 +87,7 @@ split_csv_files = from_df.write(
     split_window="1h",
     closed="right",
     label="right",
+    line_terminator="\n",
     max_workers=2,
 )
 converted_file = from_df.write("/tmp/out.dat", "TOB3", max_workers=2)

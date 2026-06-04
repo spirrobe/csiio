@@ -44,15 +44,23 @@ def _compose_ascii_header(
     return header
 
 
-def _write_csi_file(output_file, dataframe, output_format, meta=None, quiet=True):
+def _write_csi_file(
+    output_file, dataframe, output_format, meta=None, line_terminator=None, quiet=True
+):
     if output_format in ["TOA5", "TOACI1", "CSV"]:
-        write_csi_ascii(output_file, dataframe, filetype=output_format, meta=meta)
+        write_csi_ascii(
+            output_file,
+            dataframe,
+            filetype=output_format,
+            meta=meta,
+            line_terminator=line_terminator,
+        )
     elif output_format == "TOB1":
-        write_csi_tob1(output_file, dataframe, meta=meta)
+        write_csi_tob1(output_file, dataframe, meta=meta, line_terminator=line_terminator)
     elif output_format == "TOB3":
-        write_csi_tob3(output_file, dataframe, meta=meta)
+        write_csi_tob3(output_file, dataframe, meta=meta, line_terminator=line_terminator)
     elif output_format == "CSIXML":
-        write_csi_csixml(output_file, dataframe, meta=meta)
+        write_csi_csixml(output_file, dataframe, meta=meta, line_terminator=line_terminator)
     else:
         raise ValueError(f"Unknown output format: {output_format}")
     return output_file
@@ -67,16 +75,20 @@ def write_csi_files(
     exists_action="merge",
     quiet=True,
     meta=None,
+    line_terminator=None,
     closed="left",
     label="left",
 ):
     output_format = output_format.upper()
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
 
     if split_window is None:
         dataframe = _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=quiet)
         if dataframe is None:
             return output_file
-        return _write_csi_file(output_file, dataframe, output_format, meta=meta)
+        return _write_csi_file(
+            output_file, dataframe, output_format, meta=meta, line_terminator=line_terminator
+        )
 
     dataframe = _ensure_datetime_index(dataframe).sort_index()
     group_freq = _resolve_split_group_freq(split_window)
@@ -98,7 +110,9 @@ def write_csi_files(
             return outfile
         if exists_action == "merge" and os.path.exists(outfile):
             chunk = _prepare_output_for_existing(outfile, chunk, exists_action, quiet=quiet)
-        return _write_csi_file(outfile, chunk, output_format, meta=meta, quiet=quiet)
+        return _write_csi_file(
+            outfile, chunk, output_format, meta=meta, line_terminator=line_terminator, quiet=quiet
+        )
 
     if worker_count == 1:
         return [_write_split_chunk(task) for task in chunk_tasks]
@@ -122,6 +136,7 @@ def write_csi_ascii(
 ):
     if filetype not in ["TOA5", "TOACI1", "CSV"]:
         raise ValueError("filetype must be TOA5, TOACI1, or CSV")
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
 
     export_df = _prepare_export_dataframe(dataframe)
 
@@ -150,11 +165,9 @@ def write_csi_ascii(
         "index": True,
         "float_format": "%.6g",
         "escapechar": "\\",
+        "lineterminator": line_terminator,
     }
     if filetype != "CSV":
-        if line_terminator is None:
-            line_terminator = "\r\n"
-        kwargs["lineterminator"] = line_terminator
         with open(outfile, "w", encoding="utf-8", newline="") as fobj:
             fobj.write(line_terminator.join(header) + line_terminator)
 
@@ -169,12 +182,12 @@ def write_csi_ascii(
             **kwargs,
         )
     else:
-        if line_terminator is not None:
-            kwargs["lineterminator"] = line_terminator
         export_df.to_csv(outfile, **kwargs)  # Write CSV without header
 
 
-def write_csi_csixml(outfile, dataframe, process="Smp", meta=None):
+def write_csi_csixml(outfile, dataframe, process="Smp", meta=None, line_terminator=None):
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
+
     def _xml_safe_text(value):
         if pd.isna(value):
             return ""
@@ -232,7 +245,7 @@ def write_csi_csixml(outfile, dataframe, process="Smp", meta=None):
     )
 
     with open(outfile, "w", encoding="utf-8") as fobj:
-        fobj.write("\n".join(lines) + "\n")
+        fobj.write(line_terminator.join(lines) + line_terminator)
 
 
 def write_csi_tob1(
@@ -245,9 +258,10 @@ def write_csi_tob1(
     program="converted",
     table="table",
     meta=None,
+    line_terminator=None,
 ):
     export_df = _prepare_export_dataframe(dataframe).sort_index()
-
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
     station = _resolve_meta_header_value(meta, 0, 1, station)
     logger = _resolve_meta_header_value(meta, 0, 2, logger)
     serial = _resolve_meta_header_value(meta, 0, 3, serial)
@@ -274,7 +288,7 @@ def write_csi_tob1(
     ]
 
     with open(outfile, "wb") as fobj:
-        fobj.write(("\n".join(header) + "\n").encode("utf-8"))
+        fobj.write((line_terminator.join(header) + line_terminator).encode("utf-8"))
 
         basedate_ts = pd.Timestamp(BASEDATE)
         for ts, row in export_df.iterrows():
@@ -299,8 +313,10 @@ def write_csi_tob3(
     program="converted",
     table="table",
     meta=None,
+    line_terminator=None,
 ):
     export_df = _prepare_export_dataframe(dataframe).sort_index()
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
 
     station = _resolve_meta_header_value(meta, 0, 1, station)
     logger = _resolve_meta_header_value(meta, 0, 2, logger)
@@ -351,7 +367,7 @@ def write_csi_tob3(
     ]
 
     with open(outfile, "wb") as fobj:
-        fobj.write(("\n".join(header) + "\n").encode("utf-8"))
+        fobj.write((line_terminator.join(header) + line_terminator).encode("utf-8"))
 
         basedate_ts = pd.Timestamp(BASEDATE)
         for ts, row in export_df.iterrows():

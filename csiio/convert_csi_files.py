@@ -20,7 +20,9 @@ def _convert_csi_file_impl(
     meta=None,
     closed="left",
     label="left",
+    line_terminator=None,
 ):
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
     output_format = output_format.upper()
     original_output_file = output_file
     normalized_output_file = _normalize_output_path(output_file, output_format)
@@ -56,6 +58,7 @@ def _convert_csi_file_impl(
         meta=meta,
         closed=closed,
         label=label,
+        line_terminator=line_terminator,
     )
 
 
@@ -70,8 +73,10 @@ def convert_csi_file(
     meta=None,
     closed="left",
     label="left",
+    line_terminator=None,
 ):
     output_format = output_format.upper()
+    line_terminator = line_terminator if line_terminator is not None else os.linesep
     if isinstance(input_file, list | tuple):
         _resolve_parallel_workers(len(input_file), max_workers=max_workers)
         os.makedirs(output_file, exist_ok=True)
@@ -92,6 +97,7 @@ def convert_csi_file(
                 meta=meta,
                 closed=closed,
                 label=label,
+                line_terminator=line_terminator,
             )
             if isinstance(converted, list):
                 outputs.extend(converted)
@@ -110,4 +116,5 @@ def convert_csi_file(
         meta=meta,
         closed=closed,
         label=label,
+        line_terminator=line_terminator,
     )

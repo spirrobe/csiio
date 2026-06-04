@@ -77,6 +77,11 @@ def build_parser():
         default="merge",
         help="Action to perform when the output file already exists.",
     )
+    p_convert.add_argument(
+        "--line-terminator",
+        default=None,
+        help="Override the line terminator used in ASCII output headers and CSV payloads.",
+    )
     p_convert.add_argument("--quiet", action="store_true", help="Reduce reader log output.")
     p_convert.add_argument(
         "--max-workers",
@@ -131,6 +136,7 @@ def _cmd_convert(args):
         exists_action=args.exists_action,
         closed=args.closed,
         label=args.label,
+        line_terminator=args.line_terminator,
     )
     if isinstance(output, list):
         for out in output:

@@ -165,6 +165,7 @@ class CSIDataFile:
         exists_action="merge",
         closed="left",
         label="left",
+        line_terminator=None,
     ):
         from .convert_csi_files import convert_csi_file
 
@@ -189,6 +190,7 @@ class CSIDataFile:
                 meta=self.meta,
                 closed=closed,
                 label=label,
+                line_terminator=line_terminator,
             )
 
         if not self.paths:
@@ -210,6 +212,7 @@ class CSIDataFile:
                 meta=self.meta,
                 closed=closed,
                 label=label,
+                line_terminator=line_terminator,
             )
         return convert_csi_file(
             self.paths,
@@ -222,4 +225,5 @@ class CSIDataFile:
             meta=self.meta,
             closed=closed,
             label=label,
+            line_terminator=line_terminator,
         )

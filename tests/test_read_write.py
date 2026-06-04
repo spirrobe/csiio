@@ -516,6 +516,39 @@ class TestCampbellScientificIO(unittest.TestCase):
         self.assertEqual(left_chunk_lengths, [2, 1])
         self.assertEqual(right_chunk_lengths, [1, 2])
 
+    def test_csi_data_file_write_accepts_line_terminator(self):
+        reader = CSIDataFile(data=self.df.copy())
+        output = str(self.tmpdir / "line_term.dat")
+        returned = reader.write(
+            output,
+            "TOA5",
+            quiet=True,
+            line_terminator="\n",
+        )
+        self.assertIsInstance(returned, str)
+        self.assertTrue(Path(returned).exists())
+        raw_bytes = Path(returned).read_bytes()
+        first_line = raw_bytes.split(b"\n", 1)[0]
+        self.assertTrue(first_line.startswith(b'"TOA5"'))
+        self.assertFalse(first_line.endswith(b"\r"))
+
+    def test_convert_csi_file_accepts_line_terminator(self):
+        output_dir = str(self.tmpdir / "line_term_out")
+        outputs = convert_csi_file(
+            self.df,
+            output_dir,
+            "TOA5",
+            quiet=True,
+            split_window="1H",
+            line_terminator="\n",
+        )
+        self.assertIsInstance(outputs, list)
+        for output in outputs:
+            raw_bytes = Path(output).read_bytes()
+            first_line = raw_bytes.split(b"\n", 1)[0]
+            self.assertTrue(first_line.startswith(b'"TOA5"'))
+            self.assertFalse(first_line.endswith(b"\r"))
+
     def test_convert_csi_file_list_returns_one_output_per_input(self):
         src1 = self.tmpdir / "batch_source_a.dat"
         src2 = self.tmpdir / "batch_source_b.dat"
