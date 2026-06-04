@@ -10,7 +10,6 @@ from ._helpers import (
     _ensure_datetime_index,
     _infer_struct_format,
     _iter_split_chunks,
-    _merge_dataframes,
     _pack_value,
     _prepare_export_dataframe,
     _prepare_output_for_existing,
@@ -24,12 +23,25 @@ from ._helpers import (
 )
 
 
-def _read_existing_csv(filepath, index_label="TIMESTAMP"):
-    if not os.path.exists(filepath):
-        return None
-    existing = pd.read_csv(filepath, parse_dates=[index_label], index_col=index_label)
-    existing.index.name = index_label
-    return existing
+def _quoted_fields(values):
+    return ",".join(f'"{x}"' for x in values)
+
+
+def _empty_quoted_fields(count):
+    return ",".join('""' for _ in range(count))
+
+
+def _compose_ascii_header(
+    filetype, station, logger, serial, osversion, program, table, names, units
+):
+    header = [
+        _quoted_fields([filetype, station, logger, serial, osversion, program, table]),
+        _quoted_fields(names),
+        _quoted_fields(units),
+    ]
+    if filetype == "TOA5":
+        header.append(_empty_quoted_fields(len(names)))
+    return header
 
 
 def _write_csi_file(output_file, dataframe, output_format, meta=None, quiet=True):
@@ -59,19 +71,6 @@ def write_csi_files(
     output_format = output_format.upper()
 
     if split_window is None:
-        if output_format == "CSV":
-            if exists_action == "skip" and os.path.exists(output_file):
-                return output_file
-            if exists_action == "merge" and os.path.exists(output_file):
-                existing = _read_existing_csv(output_file)
-                if existing is None:
-                    raise ValueError(
-                        f"Cannot merge existing output because '{output_file}' is not a CSV file"
-                    )
-                dataframe = _merge_dataframes(existing, dataframe)
-            os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-            return _write_csi_file(output_file, dataframe, output_format, meta=meta)
-
         dataframe = _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=quiet)
         if dataframe is None:
             return output_file
@@ -94,15 +93,7 @@ def write_csi_files(
         if exists_action == "skip" and os.path.exists(outfile):
             return outfile
         if exists_action == "merge" and os.path.exists(outfile):
-            if output_format == "CSV":
-                existing = _read_existing_csv(outfile)
-                if existing is None:
-                    raise ValueError(
-                        f"Cannot merge existing output because '{outfile}' is not a CSV file"
-                    )
-                chunk = _merge_dataframes(existing, chunk)
-            else:
-                chunk = _prepare_output_for_existing(outfile, chunk, exists_action, quiet=quiet)
+            chunk = _prepare_output_for_existing(outfile, chunk, exists_action, quiet=quiet)
         return _write_csi_file(outfile, chunk, output_format, meta=meta, quiet=quiet)
 
     if worker_count == 1:
@@ -123,6 +114,7 @@ def write_csi_ascii(
     program="converted",
     table="converted",
     meta=None,
+    line_terminator=None,
 ):
     if filetype not in ["TOA5", "TOACI1", "CSV"]:
         raise ValueError("filetype must be TOA5, TOACI1, or CSV")
@@ -138,19 +130,17 @@ def write_csi_ascii(
 
     raw_names = ["TIMESTAMP"] + list(export_df.columns)
     names, units = zip(*[_split_name_and_unit(col) for col in raw_names], strict=False)
-
-    names_line = ",".join(f'"{name}"' for name in names)
-    units_line = ",".join(f'"{unit}"' for unit in units)
-    sampled_as_line = ",".join('""' for _ in names)
-
-    header = [
-        f'"{filetype}","{station}","{logger}","{serial}","{osversion}","{program}","{table}"',
-        names_line,
-        units_line,
-    ]
-
-    if filetype == "TOA5":
-        header.append(sampled_as_line)
+    header = _compose_ascii_header(
+        filetype,
+        station,
+        logger,
+        serial,
+        osversion,
+        program,
+        table,
+        names,
+        units,
+    )
 
     kwargs = {
         "index": True,
@@ -158,8 +148,11 @@ def write_csi_ascii(
         "escapechar": "\\",
     }
     if filetype != "CSV":
-        with open(outfile, "w", encoding="utf-8") as fobj:
-            fobj.write("\n".join(header) + "\n")
+        if line_terminator is None:
+            line_terminator = "\r\n"
+        kwargs["lineterminator"] = line_terminator
+        with open(outfile, "w", encoding="utf-8", newline="") as fobj:
+            fobj.write(line_terminator.join(header) + line_terminator)
 
         write_df = export_df.copy()
         write_df.index = (
@@ -172,6 +165,8 @@ def write_csi_ascii(
             **kwargs,
         )
     else:
+        if line_terminator is not None:
+            kwargs["lineterminator"] = line_terminator
         export_df.to_csv(outfile, **kwargs)  # Write CSV without header
 
 
@@ -265,13 +260,13 @@ def write_csi_tob1(
     pyformats = read_csi_formats(["ULONG", "ULONG", "ULONG"] + payload_formats)
 
     header = [
-        f'"TOB1","{station}","{logger}","{serial}","{osversion}","CPU:{program}","0","{table}"',
-        ",".join(f'"{x}"' for x in (["SECONDS", "NANOSECONDS", "RECORD"] + payload_names)),
-        ",".join(f'"{x}"' for x in (["SECONDS", "NANOSECONDS", "RN"] + payload_units)),
-        ",".join('""' for _ in ["SECONDS", "NANOSECONDS", "RECORD"])
+        _quoted_fields(["TOB1", station, logger, serial, osversion, f"CPU:{program}", "0", table]),
+        _quoted_fields(["SECONDS", "NANOSECONDS", "RECORD"] + payload_names),
+        _quoted_fields(["SECONDS", "NANOSECONDS", "RN"] + payload_units),
+        _empty_quoted_fields(len(["SECONDS", "NANOSECONDS", "RECORD"]))
         + ("," if payload_names else "")
-        + ",".join('"Smp"' for _ in payload_names),
-        ",".join(f'"{x}"' for x in (["ULONG", "ULONG", "ULONG"] + payload_formats)),
+        + _quoted_fields(["Smp" for _ in payload_names]),
+        _quoted_fields(["ULONG", "ULONG", "ULONG"] + payload_formats),
     ]
 
     with open(outfile, "wb") as fobj:
@@ -331,12 +326,24 @@ def write_csi_tob3(
     validation = 60288
 
     header = [
-        f'"TOB3","{station}","{logger}","{serial}","{osversion}","CPU:{program}","0","{table}"',
-        f'"{table}","1 SEC","{framesize}","{len(export_df)}","{validation}","Sec1Usec","0","0","0"',
-        ",".join(f'"{x}"' for x in payload_names),
-        ",".join(f'"{x}"' for x in payload_units),
-        ",".join('"Smp"' for _ in payload_names),
-        ",".join(f'"{x}"' for x in payload_formats),
+        _quoted_fields(["TOB3", station, logger, serial, osversion, f"CPU:{program}", "0", table]),
+        _quoted_fields(
+            [
+                table,
+                "1 SEC",
+                str(framesize),
+                str(len(export_df)),
+                str(validation),
+                "Sec1Usec",
+                "0",
+                "0",
+                "0",
+            ]
+        ),
+        _quoted_fields(payload_names),
+        _quoted_fields(payload_units),
+        _quoted_fields(["Smp" for _ in payload_names]),
+        _quoted_fields(payload_formats),
     ]
 
     with open(outfile, "wb") as fobj:

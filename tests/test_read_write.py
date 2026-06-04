@@ -593,6 +593,11 @@ class TestCampbellScientificIO(unittest.TestCase):
         self.assertIn('"program-meta"', header)
         self.assertIn('"table-meta"', header)
 
+        raw_bytes = meta_file.read_bytes()
+        self.assertTrue(raw_bytes.startswith(b'"TOA5"'))
+        first_line = raw_bytes.split(b"\n", 1)[0]
+        self.assertTrue(first_line.startswith(b'"TOA5"'))
+
         override_file = self.tmpdir / "meta_override.dat"
         write_csi_ascii(
             str(override_file),
@@ -600,6 +605,22 @@ class TestCampbellScientificIO(unittest.TestCase):
             meta=custom_meta,
             station="station-override",
         )
+
+        override_header = override_file.read_text(encoding="utf-8").splitlines()[0]
+        self.assertIn('"station-override"', override_header)
+        self.assertIn('"logger-meta"', override_header)
+
+        custom_nl_file = self.tmpdir / "meta_lf_only.dat"
+        write_csi_ascii(
+            str(custom_nl_file),
+            self.df,
+            meta=custom_meta,
+            line_terminator="\n",
+        )
+        custom_bytes = custom_nl_file.read_bytes()
+        first_line = custom_bytes.split(b"\n", 1)[0]
+        self.assertTrue(first_line.startswith(b'"TOA5"'))
+        self.assertFalse(first_line.endswith(b"\r"))
 
         override_header = override_file.read_text(encoding="utf-8").splitlines()[0]
         self.assertIn('"station-override"', override_header)
