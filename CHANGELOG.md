@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-04
+
+### Changed
+- Added `closed` and `label` support to split-window chunking so users can control how timestamped data is grouped and labeled.
+
 ## [0.3.1] - 2026-06-04
 
 ### Changed
@@ -13,14 +18,6 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Relaxed ASCII header tests to accept either LF-only or CRLF line endings while preserving default CRLF output for TOA5/TOACI1.
 
 ## [0.3.0] - 2026-06-03
-
-### Changed
-- Refactored reader and writer logic into separate modules and split convert into a thin wrapper around read + write.
-- Updated `CSIDataFile` to act as a lightweight convenience wrapper around read/write functionality.
-- Added support for reading only a subset of requested columns and preserving requested columns across concatenated multi-file reads.
-- Changed multi-file read semantics so missing columns in some files are logged but remaining data is still returned when at least one file contains requested columns.
-- Added stricter single-file behavior: reading with requested columns now raises if none of the requested columns are present.
-- Updated changelog workflow to handle rewritten force-pushed history by fetching the base commit when needed and skipping the check if the base commit is unavailable.
 
 ### Changed
 - Refactored reader and writer logic into separate modules and split convert into a thin wrapper around read + write.

@@ -51,12 +51,27 @@ converted_merge = convert_csi_file(
     "TOA5",
     exists_action="merge",
 )
-split_outputs = convert_csi_file("/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5", split_window="1h")
+split_outputs = convert_csi_file(
+    "/path/to/in.dat",
+    "/tmp/TOA5_out.dat",
+    "TOA5",
+    split_window="1h",
+    closed="right",
+    label="right",
+)
 # Each output file includes the chunk start/end timestamps, e.g.:
 # TOA5_out_20240101T000000_20240101T010000.dat
 split_outputs_limited = convert_csi_file(
-    "/path/to/in.dat", "/tmp/TOA5_out.dat", "TOA5", split_window="1h", max_workers=2
+    "/path/to/in.dat",
+    "/tmp/TOA5_out.dat",
+    "TOA5",
+    split_window="1h",
+    closed="right",
+    label="right",
+    max_workers=2
 )
+# Use `closed` and `label` to control how time windows are grouped and labeled.
+# `closed` determines which side of the interval is inclusive, and `label` selects the timestamp used for the group.
 
 # Initialize from an existing pandas DataFrame
 frame = pd.DataFrame(
@@ -65,7 +80,14 @@ frame = pd.DataFrame(
 )
 from_df = CSIDataFile(data=frame)
 csv_files = from_df.write("/tmp/out.csv", "CSV")
-split_csv_files = from_df.write("/tmp/out.csv", "CSV", split_window="1h", max_workers=2)
+split_csv_files = from_df.write(
+    "/tmp/out.csv",
+    "CSV",
+    split_window="1h",
+    closed="right",
+    label="right",
+    max_workers=2,
+)
 converted_file = from_df.write("/tmp/out.dat", "TOB3", max_workers=2)
 converted_file_merge = from_df.write(
     "/tmp/out.dat",
@@ -101,6 +123,9 @@ csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --output /t
 
 # Split conversion with explicit worker limit
 csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --output /tmp/TOB1_out.dat --max-workers 2
+
+# The CLI also supports interval grouping with closed/label semantics:
+# csiio convert /path/to/in.dat --output-format TOB1 --split-window 1h --closed right --label right --output /tmp/TOB1_out.dat
 
 # When the output file already exists, choose merge, overwrite, or skip behavior
 csiio convert /path/to/in.dat --output-format TOB1 --output /tmp/TOB1_out.dat --exists-action merge

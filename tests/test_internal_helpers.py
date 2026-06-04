@@ -82,6 +82,27 @@ def test_resolve_split_group_freq_valid_and_invalid():
         rcf._resolve_split_group_freq(pd.Timedelta(0))
 
 
+def test_iter_split_chunks_respects_closed_and_label():
+    idx = pd.to_datetime(["2024-01-01 00:00:00", "2024-01-01 00:30:00", "2024-01-01 01:00:00"])
+    df = pd.DataFrame({"value": [1, 2, 3]}, index=idx)
+
+    left_chunks = list(rcf._iter_split_chunks(df, "1H", closed="left", label="left"))
+    assert len(left_chunks) == 2
+    assert list(left_chunks[0][0].index) == [
+        pd.Timestamp("2024-01-01 00:00:00"),
+        pd.Timestamp("2024-01-01 00:30:00"),
+    ]
+    assert list(left_chunks[1][0].index) == [pd.Timestamp("2024-01-01 01:00:00")]
+
+    right_chunks = list(rcf._iter_split_chunks(df, "1H", closed="right", label="right"))
+    assert len(right_chunks) == 2
+    assert list(right_chunks[0][0].index) == [pd.Timestamp("2024-01-01 00:00:00")]
+    assert list(right_chunks[1][0].index) == [
+        pd.Timestamp("2024-01-01 00:30:00"),
+        pd.Timestamp("2024-01-01 01:00:00"),
+    ]
+
+
 def test_resolve_meta_process_values_extend_and_fallback():
     meta = [[], [], [], ["", "Avg"]]
     vals = rcf._resolve_meta_process_values(meta, "Smp", 4)

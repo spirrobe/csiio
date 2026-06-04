@@ -60,6 +60,18 @@ def build_parser():
         "--split-window", default=None, help="Timedelta-like split window, e.g. 1H, 1D, 30min."
     )
     p_convert.add_argument(
+        "--closed",
+        choices=["left", "right"],
+        default="left",
+        help="Whether the interval side is closed for split-window grouping.",
+    )
+    p_convert.add_argument(
+        "--label",
+        choices=["left", "right"],
+        default="left",
+        help="Which side of the interval to use as the group label for split-window output.",
+    )
+    p_convert.add_argument(
         "--exists-action",
         choices=["merge", "overwrite", "skip"],
         default="merge",
@@ -117,6 +129,8 @@ def _cmd_convert(args):
         split_window=args.split_window,
         max_workers=args.max_workers,
         exists_action=args.exists_action,
+        closed=args.closed,
+        label=args.label,
     )
     if isinstance(output, list):
         for out in output:

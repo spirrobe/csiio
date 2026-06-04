@@ -163,6 +163,8 @@ class CSIDataFile:
         split_window=None,
         max_workers=None,
         exists_action="merge",
+        closed="left",
+        label="left",
     ):
         from .convert_csi_files import convert_csi_file
 
@@ -185,6 +187,8 @@ class CSIDataFile:
                 max_workers=max_workers,
                 exists_action=exists_action,
                 meta=self.meta,
+                closed=closed,
+                label=label,
             )
 
         if not self.paths:
@@ -204,6 +208,8 @@ class CSIDataFile:
                 max_workers=max_workers,
                 exists_action=exists_action,
                 meta=self.meta,
+                closed=closed,
+                label=label,
             )
         return convert_csi_file(
             self.paths,
@@ -214,4 +220,6 @@ class CSIDataFile:
             max_workers=max_workers,
             exists_action=exists_action,
             meta=self.meta,
+            closed=closed,
+            label=label,
         )

@@ -222,9 +222,9 @@ def _resolve_meta_process_values(meta, current_value, field_count):
     return [current_value] * field_count
 
 
-def _iter_split_chunks(dataframe, split_window):
+def _iter_split_chunks(dataframe, split_window, closed="left", label="left"):
     group_freq = _resolve_split_group_freq(split_window)
-    grouped = dataframe.groupby(pd.Grouper(freq=group_freq))
+    grouped = dataframe.groupby(pd.Grouper(freq=group_freq, closed=closed, label=label))
     for _, chunk in grouped:
         if chunk.empty:
             continue

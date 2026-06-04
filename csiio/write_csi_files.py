@@ -67,6 +67,8 @@ def write_csi_files(
     exists_action="merge",
     quiet=True,
     meta=None,
+    closed="left",
+    label="left",
 ):
     output_format = output_format.upper()
 
@@ -80,7 +82,9 @@ def write_csi_files(
     group_freq = _resolve_split_group_freq(split_window)
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
     chunk_tasks = []
-    for chunk, start_ts, end_ts in _iter_split_chunks(dataframe, group_freq):
+    for chunk, start_ts, end_ts in _iter_split_chunks(
+        dataframe, group_freq, closed=closed, label=label
+    ):
         outfile = _timestamped_output_path(
             output_file, start_ts.floor(group_freq), end_ts.ceil(group_freq)
         )

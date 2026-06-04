@@ -18,6 +18,8 @@ def _convert_csi_file_impl(
     max_workers=None,
     exists_action="merge",
     meta=None,
+    closed="left",
+    label="left",
 ):
     output_format = output_format.upper()
     original_output_file = output_file
@@ -52,6 +54,8 @@ def _convert_csi_file_impl(
         exists_action=exists_action,
         quiet=quiet,
         meta=meta,
+        closed=closed,
+        label=label,
     )
 
 
@@ -64,6 +68,8 @@ def convert_csi_file(
     max_workers=None,
     exists_action="merge",
     meta=None,
+    closed="left",
+    label="left",
 ):
     output_format = output_format.upper()
     if isinstance(input_file, list | tuple):
@@ -84,6 +90,8 @@ def convert_csi_file(
                 max_workers=max_workers,
                 exists_action=exists_action,
                 meta=meta,
+                closed=closed,
+                label=label,
             )
             if isinstance(converted, list):
                 outputs.extend(converted)
@@ -100,4 +108,6 @@ def convert_csi_file(
         max_workers=max_workers,
         exists_action=exists_action,
         meta=meta,
+        closed=closed,
+        label=label,
     )

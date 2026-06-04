@@ -476,6 +476,46 @@ class TestCampbellScientificIO(unittest.TestCase):
             loaded, _ = read_csi_files(str(path), asdataframe=True, sortindex=True, quiet=True)
             self.assertGreater(len(loaded), 0)
 
+    def test_convert_split_window_closed_and_label_affects_chunking(self):
+        times = pd.to_datetime(
+            ["2024-01-01 00:00:00", "2024-01-01 00:30:00", "2024-01-01 01:00:00"]
+        )
+        df = pd.DataFrame({"air_temp (degC)": [1.0, 2.0, 3.0]}, index=times)
+
+        outputs_left = convert_csi_file(
+            df,
+            str(self.tmpdir / "converted_left.dat"),
+            "TOA5",
+            quiet=True,
+            split_window="1H",
+            closed="left",
+            label="left",
+        )
+        outputs_right = convert_csi_file(
+            df,
+            str(self.tmpdir / "converted_right.dat"),
+            "TOA5",
+            quiet=True,
+            split_window="1H",
+            closed="right",
+            label="right",
+        )
+
+        self.assertEqual(len(outputs_left), 2)
+        self.assertEqual(len(outputs_right), 2)
+
+        left_chunk_lengths = [
+            len(read_csi_files(str(path), asdataframe=True, sortindex=True, quiet=True)[0])
+            for path in outputs_left
+        ]
+        right_chunk_lengths = [
+            len(read_csi_files(str(path), asdataframe=True, sortindex=True, quiet=True)[0])
+            for path in outputs_right
+        ]
+
+        self.assertEqual(left_chunk_lengths, [2, 1])
+        self.assertEqual(right_chunk_lengths, [1, 2])
+
     def test_convert_csi_file_list_returns_one_output_per_input(self):
         src1 = self.tmpdir / "batch_source_a.dat"
         src2 = self.tmpdir / "batch_source_b.dat"
