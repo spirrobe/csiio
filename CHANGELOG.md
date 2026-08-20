@@ -10,6 +10,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 - Fixed an issue with L format (LONG) type when reading data as these were seen as 8 bytes instead of 4 which would be correct.
+- updated workflow versions...
 
 ## [0.3.4] - 2026-06-04
 
