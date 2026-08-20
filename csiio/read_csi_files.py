@@ -594,9 +594,9 @@ def read_csi_tob1(file_obj, meta):
     for _i in range(int(n_rec_total)):
         tempdata = []
         for ii in pyformat:
-            nbyte = struct.Struct(ii).size
             if ii == "L":
                 ii = ">L"
+            nbyte = struct.Struct(ii).size
             tdata = struct.unpack_from(ii, file_obj.read(nbyte))[0]
             if ii == ">H":
                 tdata = fp22float(tdata)

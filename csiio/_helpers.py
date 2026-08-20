@@ -66,7 +66,7 @@ def read_csi_formats(csformat):
         "Boolean": "?",
         "Bool8": "8?",
         "Bool4": "4?",
-        "LONG": "l",
+        "LONG": "=L",
         "ULONG": "=L",
     }
     for fmt in csformat:
