@@ -1,4 +1,13 @@
 repos:
+  - repo: local
+    hooks:
+      - id: check-version-bump
+        name: Check if version has been bumped
+        entry: python3 scripts/check_versions.py
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.1.13
     hooks:

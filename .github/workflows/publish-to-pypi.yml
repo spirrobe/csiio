@@ -1,7 +1,10 @@
 name: Publish the csiio python package to both PyPI and TestPyPI
 
-on: push
-
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # only publish to PyPI on tag pushes
+  workflow_dispatch: # Adds a manual "Run workflow" button
 jobs:
   build:
     name: Build distribution 📦

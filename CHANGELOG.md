@@ -6,11 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
-## [0.3.5] - 2026-08-20
+## [0.3.5] - 2026-08-21
 
 ### Changed
 - Fixed an issue with L format (LONG) type when reading data as these were seen as 8 bytes instead of 4 which would be correct.
 - updated workflow versions...
+- added button to run them manually
+- pre-commit check for version bump in pyproject
 
 ## [0.3.4] - 2026-06-04
 
