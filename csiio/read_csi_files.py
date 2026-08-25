@@ -203,6 +203,10 @@ def _normalized_meta_from_file_meta(file_meta):
         merged_fields.get("TIMESTAMP", {}).get("process", ""),
         merged_fields.get("RECORD", {}).get("process", ""),
     ]
+    formats = [
+        merged_fields.get("TIMESTAMP", {}).get("type", ""),
+        merged_fields.get("RECORD", {}).get("type", ""),
+    ]
 
     for field in ordered_fields:
         name = field.get("name", "")
@@ -213,7 +217,7 @@ def _normalized_meta_from_file_meta(file_meta):
         names.append(name)
         units.append(field.get("unit", ""))
         process.append(field.get("process", ""))
-
+        formats.append(field.get("type", ""))
     header = list(
         first_meta.get(
             "header", ["TOA5", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown"]
@@ -224,6 +228,7 @@ def _normalized_meta_from_file_meta(file_meta):
         names,
         units,
         process,
+        formats,
     ]
 
 

@@ -53,9 +53,8 @@ def _emit(message, level="info", quiet=False):
         print(message)
 
 
-def read_csi_formats(csformat):
-    pyformat = []
-    knownformats = {
+def get_csi_formats():
+    return {
         "FP2": ">H",
         "IEEE4": "f",
         "IEEE4B": ">f",
@@ -69,6 +68,11 @@ def read_csi_formats(csformat):
         "LONG": "=L",
         "ULONG": "=L",
     }
+
+
+def read_csi_formats(csformat):
+    pyformat = []
+    knownformats = get_csi_formats()
     for fmt in csformat:
         if fmt.startswith("ASCII"):
             n_string = fmt.replace(")", "").split("(")
@@ -85,6 +89,22 @@ def read_csi_formats(csformat):
             )
 
     return pyformat
+
+
+def meta2binary_csiformats(meta, columns=None):
+    if meta[0][0] not in ["TOB1", "TOB3"]:
+        return None
+    else:
+        # pre-defined binary formats for TOB1/TOB3 but we added the TIMESTAMP directly.
+        if ["ULONG", "ULONG", "ULONG"] == meta[-1][1:3]:
+            if columns is None:
+                return meta[-1]
+        else:
+            return {
+                col: meta[-1][colno]
+                for colno, col in enumerate(meta[1])
+                if col in columns and meta[-1][colno]
+            }
 
 
 def _split_name_and_unit(label):
@@ -325,6 +345,7 @@ def _pack_value(fmt, value):
         return struct.pack(fmt, bool(value))
 
     if fmt[-1] in ["H", "L", "I", "l", "i"]:
+        print(fmt, value)
         return struct.pack(fmt, int(value))
 
     return struct.pack(fmt, float(value))

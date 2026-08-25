@@ -19,6 +19,7 @@ from ._helpers import (
     _resolve_split_group_freq,
     _split_name_and_unit,
     _timestamped_output_path,
+    meta2binary_csiformats,
     read_csi_formats,
 )
 
@@ -268,14 +269,18 @@ def write_csi_tob1(
     osversion = _resolve_meta_header_value(meta, 0, 4, osversion)
     program = _resolve_meta_header_value(meta, 0, 5, program)
     table = _resolve_meta_header_value(meta, 0, 6, table)
-
+    basefields = ["ULONG", "ULONG", "ULONG"]
     payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
     payload_names_units = [_split_name_and_unit(c) for c in payload_cols]
     payload_names = [name for name, _ in payload_names_units]
     payload_units = [unit for _, unit in payload_names_units]
-
-    payload_formats = [_infer_struct_format(export_df[c], tob3=False) for c in payload_cols]
-    pyformats = read_csi_formats(["ULONG", "ULONG", "ULONG"] + payload_formats)
+    #  this first branch only works for the binary TOB1/TOB3
+    payload_formats = (
+        meta2binary_csiformats(meta, columns=payload_names)
+        if meta and meta[0][0] == "TOB1"
+        else {c: _infer_struct_format(export_df[c], tob3=False) for c in payload_cols}
+    )
+    pyformats = read_csi_formats(basefields + list(payload_formats.values()))
 
     header = [
         _quoted_fields(["TOB1", station, logger, serial, osversion, f"CPU:{program}", "0", table]),
@@ -284,7 +289,7 @@ def write_csi_tob1(
         _empty_quoted_fields(len(["SECONDS", "NANOSECONDS", "RECORD"]))
         + ("," if payload_names else "")
         + _quoted_fields(["Smp" for _ in payload_names]),
-        _quoted_fields(["ULONG", "ULONG", "ULONG"] + payload_formats),
+        _quoted_fields(basefields + list(payload_formats.values())),
     ]
 
     with open(outfile, "wb") as fobj:

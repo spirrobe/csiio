@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-08-25
+
+### Changed
+- Added clearer formats for TOB1 output from meta instead of guessing.
+
 ## [0.3.5] - 2026-08-21
 
 ### Changed
