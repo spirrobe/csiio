@@ -200,22 +200,9 @@ class CSIDataFile:
 
         if self.meta and self.meta and len(self.meta) > 0 and len(self.meta[0]) > 0:
             self.meta[0][0] = output_format
-        if len(self.paths) == 1:
-            return convert_csi_file(
-                self.paths[0],
-                output_file,
-                output_format,
-                quiet=quiet,
-                split_window=split_window,
-                max_workers=max_workers,
-                exists_action=exists_action,
-                meta=self.meta,
-                closed=closed,
-                label=label,
-                line_terminator=line_terminator,
-            )
+
         return convert_csi_file(
-            self.paths,
+            self.paths if len(self.paths) > 1 else self.paths[0],
             output_file,
             output_format,
             quiet=quiet,

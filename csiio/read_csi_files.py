@@ -6,28 +6,25 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
+try:
+    import tqdm
+except ImportError:
+    tqdm = None
+
 from ._helpers import (
     BASEDATE,
+    _emit,
     _resolve_parallel_workers,
     read_csi_formats,
 )
 
 __author__ = "spirrobe"
 
-LOGGER = logging.getLogger(__name__)
-
-
-def _emit(message, level="info", quiet=False):
-    log_func = getattr(LOGGER, level, LOGGER.info)
-    log_func(message)
-    if quiet and level == "info":
-        return
-    if not LOGGER.hasHandlers():
-        print(message)
-
+LOGGER = logging.getLogger("csiio")
 
 _DEFAULT_HEADER_VALUES = (
     "TOA5",
+    "converted",
     "converted",
     "converted",
     "converted",
@@ -274,7 +271,16 @@ def _read_csi_files_impl(
             results = [_read_single_file(file) for file in filename]
         else:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
-                results = list(executor.map(_read_single_file, filename))
+                if tqdm is None:
+                    results = list(executor.map(_read_single_file, filename))
+                else:
+                    results = list(
+                        tqdm.tqdm(
+                            executor.map(_read_single_file, filename),
+                            total=len(filename),
+                            disable=quiet,
+                        )
+                    )
 
         if meta_only:
             if collect_file_meta:
@@ -388,7 +394,11 @@ def _read_csi_files_impl(
                         quiet=quiet,
                     )
                 data = data.reindex(columns=requested_columns)
-
+            if not quiet:
+                _emit(
+                    f"Read {len(data)} rows and {len(data.columns)} columns from {filetype} file",
+                    quiet=quiet,
+                )
             if collect_file_meta:
                 return data, meta, per_file_meta
             return data, meta
@@ -419,7 +429,7 @@ def read_csi_files(
     )
 
 
-def read_csi_meta(file_obj, filetype):
+def read_csi_meta(file_obj, filetype, quiet=True):
     filetypes = {
         "TOA5": 4,
         "TOB1": 5,
@@ -490,6 +500,8 @@ def read_csi_meta(file_obj, filetype):
         ]
     for i, row in enumerate(meta):
         meta[i] = [j.replace('"', "") for j in row]
+    if not quiet:
+        _emit(f"Read {len(meta)} metadata rows from {filetype} file", quiet=quiet)
     return meta
 
 

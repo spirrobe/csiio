@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-08-25
+
+### Changed
+- using logging better throughout the calls and making sure writer is not quiet when quiet=False
+
 ## [0.3.6] - 2026-08-25
 
 ### Changed

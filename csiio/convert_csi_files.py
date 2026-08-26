@@ -1,12 +1,16 @@
+import logging
 import os
 
 import pandas as pd
 
 from ._helpers import (
+    _emit,
     _normalize_output_path,
     _resolve_parallel_workers,
 )
 from .write_csi_files import write_csi_files
+
+LOGGER = logging.getLogger("csiio")
 
 
 def _convert_csi_file_impl(
@@ -46,7 +50,11 @@ def _convert_csi_file_impl(
             max_workers=max_workers,
         )
         meta = _normalized_meta_from_file_meta(file_meta)
-
+    if not quiet:
+        _emit(
+            f"Converting {len(data)} rows and {len(data.columns)} columns to {output_format} format",
+            quiet=quiet,
+        )
     return write_csi_files(
         output_file,
         data,
@@ -76,6 +84,11 @@ def convert_csi_file(
     line_terminator=None,
 ):
     output_format = output_format.upper()
+    if not quiet:
+        _emit(
+            f"Converting {input_file} to {output_format} format and saving to {output_file}",
+            quiet=quiet,
+        )
     line_terminator = line_terminator if line_terminator is not None else os.linesep
     if isinstance(input_file, list | tuple):
         _resolve_parallel_workers(len(input_file), max_workers=max_workers)
@@ -86,6 +99,26 @@ def convert_csi_file(
             stem, _ = os.path.splitext(basename)
             ext = ".csv" if output_format == "CSV" else ".dat"
             outfile = os.path.join(output_file, f"{output_format}_{stem}{ext}")
+            # take the outfile from the user if it is not the same as the output_file directory
+            if output_file != outfile:
+                if os.sep not in output_file:
+                    outfolder = os.path.dirname(one_input)
+                    outfile = os.path.join(outfolder, f"{output_format}_{stem}{ext}")
+                else:
+                    outfolder, outfile = os.path.split(output_file)
+                    outfile = f"{outfolder}/{output_format}_{outfile}{ext}"
+
+            if not quiet:
+                if split_window is not None:
+                    _emit(
+                        f"Converting {one_input} to {output_format} format and saving to {outfile.replace(ext,'_STARTDATE_STARTTIME_ENDDATE_ENDTIME'+ext).replace('__','_')} with split_window={split_window}",
+                        quiet=quiet,
+                    )
+                else:
+                    _emit(
+                        f"Converting {one_input} to {output_format} format and saving to {outfile}",
+                        quiet=quiet,
+                    )
             converted = _convert_csi_file_impl(
                 one_input,
                 outfile,
@@ -103,6 +136,11 @@ def convert_csi_file(
                 outputs.extend(converted)
             else:
                 outputs.append(converted)
+        if not quiet:
+            _emit(
+                f"Converted {len(outputs)} files to {output_format} format and saved to {output_file}",
+                quiet=quiet,
+            )
         return outputs
 
     return _convert_csi_file_impl(

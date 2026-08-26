@@ -1,3 +1,4 @@
+import logging
 import os
 import struct
 from concurrent.futures import ThreadPoolExecutor
@@ -5,8 +6,14 @@ from xml.sax.saxutils import escape
 
 import pandas as pd
 
+try:
+    import tqdm
+except ImportError:
+    tqdm = None
+
 from ._helpers import (
     BASEDATE,
+    _emit,
     _ensure_datetime_index,
     _infer_struct_format,
     _iter_split_chunks,
@@ -22,6 +29,8 @@ from ._helpers import (
     meta2binary_csiformats,
     read_csi_formats,
 )
+
+LOGGER = logging.getLogger("csiio")
 
 
 def _quoted_fields(values):
@@ -48,6 +57,10 @@ def _compose_ascii_header(
 def _write_csi_file(
     output_file, dataframe, output_format, meta=None, line_terminator=None, quiet=True
 ):
+    if not quiet:
+        _emit(f"Writing {output_format} file: {output_file}")
+        _emit(f"  Records: {len(dataframe)}", quiet=quiet)
+        _emit(f"  Payload columns: {', '.join(dataframe.columns)}", quiet=quiet)
     if output_format in ["TOA5", "TOACI1", "CSV"]:
         write_csi_ascii(
             output_file,
@@ -57,11 +70,29 @@ def _write_csi_file(
             line_terminator=line_terminator,
         )
     elif output_format == "TOB1":
-        write_csi_tob1(output_file, dataframe, meta=meta, line_terminator=line_terminator)
+        write_csi_tob1(
+            output_file,
+            dataframe,
+            meta=meta,
+            line_terminator=line_terminator,
+            quiet=quiet,
+        )
     elif output_format == "TOB3":
-        write_csi_tob3(output_file, dataframe, meta=meta, line_terminator=line_terminator)
+        write_csi_tob3(
+            output_file,
+            dataframe,
+            meta=meta,
+            line_terminator=line_terminator,
+            quiet=quiet,
+        )
     elif output_format == "CSIXML":
-        write_csi_csixml(output_file, dataframe, meta=meta, line_terminator=line_terminator)
+        write_csi_csixml(
+            output_file,
+            dataframe,
+            meta=meta,
+            line_terminator=line_terminator,
+            quiet=quiet,
+        )
     else:
         raise ValueError(f"Unknown output format: {output_format}")
     return output_file
@@ -88,7 +119,12 @@ def write_csi_files(
         if dataframe is None:
             return output_file
         return _write_csi_file(
-            output_file, dataframe, output_format, meta=meta, line_terminator=line_terminator
+            output_file,
+            dataframe,
+            output_format,
+            meta=meta,
+            line_terminator=line_terminator,
+            quiet=quiet,
         )
 
     dataframe = _ensure_datetime_index(dataframe).sort_index()
@@ -115,11 +151,22 @@ def write_csi_files(
             outfile, chunk, output_format, meta=meta, line_terminator=line_terminator, quiet=quiet
         )
 
+    if not quiet:
+        _emit(f"Writing {len(chunk_tasks)} split files with {worker_count} worker(s)...")
     if worker_count == 1:
         return [_write_split_chunk(task) for task in chunk_tasks]
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        return list(executor.map(_write_split_chunk, chunk_tasks))
+        if tqdm is not None and not quiet:
+            return list(executor.map(_write_split_chunk, chunk_tasks))
+        else:
+            return list(
+                tqdm.tqdm(
+                    executor.map(_write_split_chunk, chunk_tasks),
+                    total=len(chunk_tasks),
+                    disable=quiet,
+                )
+            )
 
 
 def write_csi_ascii(
@@ -134,6 +181,7 @@ def write_csi_ascii(
     table="converted",
     meta=None,
     line_terminator=None,
+    quiet=True,
 ):
     if filetype not in ["TOA5", "TOACI1", "CSV"]:
         raise ValueError("filetype must be TOA5, TOACI1, or CSV")
@@ -168,6 +216,11 @@ def write_csi_ascii(
         "escapechar": "\\",
         "lineterminator": line_terminator,
     }
+    if not quiet:
+        _emit(f"Writing {filetype} file: {outfile}")
+        _emit(f"  Records: {len(export_df)}")
+        _emit(f"  Payload columns: {', '.join(names[1:])}")
+        _emit(f"  Payload units: {', '.join(units[1:])}")
     if filetype != "CSV":
         with open(outfile, "w", encoding="utf-8", newline="") as fobj:
             fobj.write(line_terminator.join(header) + line_terminator)
@@ -186,7 +239,9 @@ def write_csi_ascii(
         export_df.to_csv(outfile, **kwargs)  # Write CSV without header
 
 
-def write_csi_csixml(outfile, dataframe, process="Smp", meta=None, line_terminator=None):
+def write_csi_csixml(
+    outfile, dataframe, process="Smp", meta=None, line_terminator=None, quiet=True
+):
     line_terminator = line_terminator if line_terminator is not None else os.linesep
 
     def _xml_safe_text(value):
@@ -227,6 +282,12 @@ def write_csi_csixml(outfile, dataframe, process="Smp", meta=None, line_terminat
             "  <data>",
         ]
     )
+    if not quiet:
+        _emit(f"Writing CSIXML file: {outfile}")
+        _emit(f"  Records: {len(export_df)}")
+        _emit(f"  Payload columns: {', '.join([name for name, _ in split_names])}")
+        _emit(f"  Payload units: {', '.join([unit for _, unit in split_names])}")
+        _emit(f"  Payload processes: {', '.join(process_values)}")
 
     for timestamp, row in export_df.iterrows():
         recno = int(row["RECORD (RN)"]) if "RECORD (RN)" in row else 0
@@ -260,6 +321,7 @@ def write_csi_tob1(
     table="table",
     meta=None,
     line_terminator=None,
+    quiet=True,
 ):
     export_df = _prepare_export_dataframe(dataframe).sort_index()
     line_terminator = line_terminator if line_terminator is not None else os.linesep
@@ -291,7 +353,11 @@ def write_csi_tob1(
         + _quoted_fields(["Smp" for _ in payload_names]),
         _quoted_fields(basefields + list(payload_formats.values())),
     ]
-
+    if not quiet:
+        _emit(f"Writing TOB1 file: {outfile}")
+        _emit(f"  Records: {len(export_df)}")
+        _emit(f"  Payload columns: {', '.join(payload_names)}")
+        _emit(f"  Payload formats: {', '.join(payload_formats.values())}")
     with open(outfile, "wb") as fobj:
         fobj.write((line_terminator.join(header) + line_terminator).encode("utf-8"))
 
@@ -319,6 +385,7 @@ def write_csi_tob3(
     table="table",
     meta=None,
     line_terminator=None,
+    quiet=True,
 ):
     export_df = _prepare_export_dataframe(dataframe).sort_index()
     line_terminator = line_terminator if line_terminator is not None else os.linesep
@@ -370,7 +437,12 @@ def write_csi_tob3(
         _quoted_fields(["Smp" for _ in payload_names]),
         _quoted_fields(payload_formats),
     ]
-
+    if not quiet:
+        _emit(f"Writing TOB3 file: {outfile}")
+        _emit(f"  Framesize: {framesize} bytes")
+        _emit(f"  Records: {len(export_df)}")
+        _emit(f"  Payload columns: {', '.join(payload_names)}")
+        _emit(f"  Payload formats: {', '.join(payload_formats)}")
     with open(outfile, "wb") as fobj:
         fobj.write((line_terminator.join(header) + line_terminator).encode("utf-8"))
 

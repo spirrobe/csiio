@@ -260,7 +260,7 @@ class TestCampbellScientificIO(unittest.TestCase):
         src = self.tmpdir / "sample_columns.dat"
         write_csi_ascii(str(src), self.df)
 
-        with self.assertLogs("csiio.read_csi_files", level="WARNING") as cm:
+        with self.assertLogs("csiio", level="WARNING") as cm:
             loaded, _ = read_csi_files(
                 str(src),
                 columns=["air_temp (degC)", "missing (x)"],
@@ -302,7 +302,7 @@ class TestCampbellScientificIO(unittest.TestCase):
         write_csi_ascii(str(src_a), df_a)
         write_csi_ascii(str(src_other), df_other)
 
-        with self.assertLogs("csiio.read_csi_files", level="WARNING") as cm:
+        with self.assertLogs("csiio", level="WARNING") as cm:
             loaded, _ = read_csi_files(
                 [src_a, src_other],
                 columns=["air_temp (degC)", "co2_flux (umol m-2 s-1)"],
@@ -590,7 +590,7 @@ class TestCampbellScientificIO(unittest.TestCase):
         for output in outputs:
             path = Path(output)
             self.assertTrue(path.exists())
-            self.assertRegex(path.name, r"^TOA5_split_source_[ab]_\d{8}_\d{6}_\d{8}_\d{6}\.dat$")
+            self.assertRegex(path.name, r"^TOA5_split_batch_out_\d{8}_\d{6}_\d{8}_\d{6}\.dat$")
 
     def test_read_many_files_accepts_explicit_max_workers(self):
         src1 = self.tmpdir / "read_many_a.dat"

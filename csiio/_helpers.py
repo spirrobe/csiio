@@ -4,7 +4,12 @@ import struct
 
 import pandas as pd
 
-LOGGER = logging.getLogger(__name__)
+try:
+    import tqdm
+except ImportError:
+    tqdm = None
+
+LOGGER = logging.getLogger("csiio")
 
 BASEDATE = pd.Timestamp(
     year=1990,
@@ -24,6 +29,15 @@ _DEFAULT_HEADER_VALUES = (
     "converted",
     "converted",
 )
+
+
+def _emit(message, level="info", quiet=False):
+    log_func = getattr(LOGGER, level, LOGGER.info)
+    log_func(message)
+    if quiet and level == "info":
+        return
+    if not LOGGER.hasHandlers():
+        print(message)
 
 
 def _resolve_parallel_workers(task_count, max_workers=None):
@@ -184,10 +198,20 @@ def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=Tr
             existing, _ = __import__(
                 "csiio.read_csi_files", fromlist=["read_csi_files"]
             ).read_csi_files(output_file, quiet=quiet)
+            _emit(
+                f"Merging {len(dataframe)} rows and {len(dataframe.columns)} columns with existing "
+                f"CSI file {output_file} containing {len(existing)} rows and {len(existing.columns)} columns",
+                quiet=quiet,
+            )
             return _merge_dataframes(existing, dataframe)
 
         if _is_csv_file(output_file):
             existing = pd.read_csv(output_file, parse_dates=["TIMESTAMP"], index_col="TIMESTAMP")
+            _emit(
+                f"Merging {len(dataframe)} rows and {len(dataframe.columns)} columns with existing "
+                f"CSV file {output_file} containing {len(existing)} rows and {len(existing.columns)} columns",
+                quiet=quiet,
+            )
             return _merge_dataframes(existing, dataframe)
 
         raise ValueError(
@@ -198,6 +222,7 @@ def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=Tr
 
 
 def _resolve_split_group_freq(split_window):
+    _emit(f"Resolving split_window: {split_window}", level="debug")
     if isinstance(split_window, pd.Timedelta):
         if split_window <= pd.Timedelta(0):
             raise ValueError("split_window must be a positive duration")
@@ -345,7 +370,6 @@ def _pack_value(fmt, value):
         return struct.pack(fmt, bool(value))
 
     if fmt[-1] in ["H", "L", "I", "l", "i"]:
-        print(fmt, value)
         return struct.pack(fmt, int(value))
 
     return struct.pack(fmt, float(value))
