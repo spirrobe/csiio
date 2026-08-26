@@ -20,6 +20,16 @@ pip install -e .
 - Export single CSV outputs or time-window-split CSVs via `CSIDataFile.write(..., "CSV")` or `csiio convert --output-format CSV`.
 - Use either CLI workflows or Python API workflows.
 
+
+Note: When using split_window functionality the start and endtimestamp is added as part of the ilename. Due to potentially exist_action checks it is good practice to instead of passing the full outfile to write/convert to pass a folder with fileprefix. Within the processing chain, the filename is split into folder, filename and extension and the output_format is added in front of the filename and the STARTDATE_STARTTIME_ENDDATE_ENDTIME are added after in the format YYYYmmdd_HHMMSS_YYYYmmdd_HHMMSS floored/ceiled to the split window frequency.
+
+<i>
+Examples:
+DATAFILE.dat becomes TOB1_DATAFILE_20230101_000000_20230102_000000.dat (and more if more data are available if split_window='1D')
+DATAFILE.dat becomes TOB1_DATAFILE_20230101_000000_20230101_003000.dat (and more if more data are available if split_window='30Min')
+</i>
+
+
 ## Changelog Policy
 
 - Release notes live in `CHANGELOG.md`.
