@@ -10,6 +10,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ### Changed
 - using logging better throughout the calls and making sure writer is not quiet when quiet=False
+- more predictable filename when called correctly, see [README.md](README.md)
 
 ## [0.3.6] - 2026-08-25
 
