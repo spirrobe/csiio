@@ -157,7 +157,7 @@ def _is_csi_file(filepath):
     return any(head.startswith(prefix) for prefix in prefix_map)
 
 
-def _merge_dataframes(existing, new):
+def _merge_dataframes(existing, new, update_record_numbers=False):
     existing = _ensure_datetime_index(existing).copy()
     new = _ensure_datetime_index(new)
 
@@ -165,8 +165,8 @@ def _merge_dataframes(existing, new):
     if not overlapping.empty:
         existing = existing.drop(overlapping)
 
-    merged = pd.concat([existing, new]).sort_index()
-    if "RECORD (RN)" in merged.columns:
+    merged = pd.concat([existing, new], join="outer").sort_index()
+    if "RECORD (RN)" in merged.columns and update_record_numbers:
         merged["RECORD (RN)"] = range(1, len(merged) + 1)
     return merged
 
@@ -182,7 +182,9 @@ def _is_csv_file(filepath):
     return "," in head or "\t" in head
 
 
-def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=True):
+def _prepare_output_for_existing(
+    output_file, dataframe, exists_action, update_record_numbers=False, quiet=True
+):
     if exists_action == "overwrite":
         return dataframe
 
@@ -203,7 +205,9 @@ def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=Tr
                 f"CSI file {output_file} containing {len(existing)} rows and {len(existing.columns)} columns",
                 quiet=quiet,
             )
-            return _merge_dataframes(existing, dataframe)
+            return _merge_dataframes(
+                existing, dataframe, update_record_numbers=update_record_numbers
+            )
 
         if _is_csv_file(output_file):
             existing = pd.read_csv(output_file, parse_dates=["TIMESTAMP"], index_col="TIMESTAMP")
@@ -212,7 +216,9 @@ def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=Tr
                 f"CSV file {output_file} containing {len(existing)} rows and {len(existing.columns)} columns",
                 quiet=quiet,
             )
-            return _merge_dataframes(existing, dataframe)
+            return _merge_dataframes(
+                existing, dataframe, update_record_numbers=update_record_numbers
+            )
 
         raise ValueError(
             f"Cannot merge existing output because '{output_file}' is neither a CSI nor a CSV file"
@@ -221,8 +227,8 @@ def _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=Tr
     raise ValueError("exists_action must be one of overwrite, skip, or merge")
 
 
-def _resolve_split_group_freq(split_window):
-    _emit(f"Resolving split_window: {split_window}", level="debug")
+def _resolve_split_group_freq(split_window, quiet=True):
+    _emit(f"Resolving split_window: {split_window}", quiet=quiet)
     if isinstance(split_window, pd.Timedelta):
         if split_window <= pd.Timedelta(0):
             raise ValueError("split_window must be a positive duration")
@@ -267,8 +273,8 @@ def _resolve_meta_process_values(meta, current_value, field_count):
     return [current_value] * field_count
 
 
-def _iter_split_chunks(dataframe, split_window, closed="left", label="left"):
-    group_freq = _resolve_split_group_freq(split_window)
+def _iter_split_chunks(dataframe, split_window, closed="left", label="left", quiet=True):
+    group_freq = _resolve_split_group_freq(split_window, quiet=quiet)
     grouped = dataframe.groupby(pd.Grouper(freq=group_freq, closed=closed, label=label))
     for _, chunk in grouped:
         if chunk.empty:
@@ -276,9 +282,11 @@ def _iter_split_chunks(dataframe, split_window, closed="left", label="left"):
         yield chunk, chunk.index.min(), chunk.index.max()
 
 
-def _prepare_export_dataframe(dataframe):
+def _prepare_export_dataframe(dataframe, columns=None):
     export_df = dataframe.copy()
     export_df = _ensure_datetime_index(export_df)
+    if columns is not None:
+        export_df = export_df[columns]
     if "RECORD (RN)" not in export_df.columns:
         export_df.insert(0, "RECORD (RN)", range(1, len(export_df) + 1))
     return export_df

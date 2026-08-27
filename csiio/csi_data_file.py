@@ -166,6 +166,7 @@ class CSIDataFile:
         closed="left",
         label="left",
         line_terminator=None,
+        columns=None,
     ):
         from .convert_csi_files import convert_csi_file
 
@@ -191,6 +192,7 @@ class CSIDataFile:
                 closed=closed,
                 label=label,
                 line_terminator=line_terminator,
+                columns=columns if columns is not None else self.data.columns,
             )
 
         if not self.paths:
@@ -213,4 +215,9 @@ class CSIDataFile:
             closed=closed,
             label=label,
             line_terminator=line_terminator,
+            columns=columns
+            if columns is not None
+            else self.data.columns
+            if self.data is not None
+            else None,
         )

@@ -25,6 +25,7 @@ def _convert_csi_file_impl(
     closed="left",
     label="left",
     line_terminator=None,
+    columns=None,
 ):
     line_terminator = line_terminator if line_terminator is not None else os.linesep
     output_format = output_format.upper()
@@ -48,6 +49,7 @@ def _convert_csi_file_impl(
             sortindex=True,
             collect_file_meta=True,
             max_workers=max_workers,
+            columns=columns,
         )
         meta = _normalized_meta_from_file_meta(file_meta)
     if not quiet:
@@ -67,6 +69,7 @@ def _convert_csi_file_impl(
         closed=closed,
         label=label,
         line_terminator=line_terminator,
+        columns=columns,
     )
 
 
@@ -82,6 +85,7 @@ def convert_csi_file(
     closed="left",
     label="left",
     line_terminator=None,
+    columns=None,
 ):
     output_format = output_format.upper()
     if not quiet:
@@ -131,6 +135,7 @@ def convert_csi_file(
                 closed=closed,
                 label=label,
                 line_terminator=line_terminator,
+                columns=columns,
             )
             if isinstance(converted, list):
                 outputs.extend(converted)
@@ -155,4 +160,5 @@ def convert_csi_file(
         closed=closed,
         label=label,
         line_terminator=line_terminator,
+        columns=columns,
     )

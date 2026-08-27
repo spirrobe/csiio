@@ -55,7 +55,7 @@ def _compose_ascii_header(
 
 
 def _write_csi_file(
-    output_file, dataframe, output_format, meta=None, line_terminator=None, quiet=True
+    output_file, dataframe, output_format, meta=None, line_terminator=None, quiet=True, columns=None
 ):
     if not quiet:
         _emit(f"Writing {output_format} file: {output_file}")
@@ -68,6 +68,8 @@ def _write_csi_file(
             filetype=output_format,
             meta=meta,
             line_terminator=line_terminator,
+            quiet=quiet,
+            columns=columns,
         )
     elif output_format == "TOB1":
         write_csi_tob1(
@@ -76,6 +78,7 @@ def _write_csi_file(
             meta=meta,
             line_terminator=line_terminator,
             quiet=quiet,
+            columns=columns,
         )
     elif output_format == "TOB3":
         write_csi_tob3(
@@ -84,6 +87,7 @@ def _write_csi_file(
             meta=meta,
             line_terminator=line_terminator,
             quiet=quiet,
+            columns=columns,
         )
     elif output_format == "CSIXML":
         write_csi_csixml(
@@ -92,6 +96,7 @@ def _write_csi_file(
             meta=meta,
             line_terminator=line_terminator,
             quiet=quiet,
+            columns=columns,
         )
     else:
         raise ValueError(f"Unknown output format: {output_format}")
@@ -110,12 +115,20 @@ def write_csi_files(
     line_terminator=None,
     closed="left",
     label="left",
+    update_record_numbers=False,
+    columns=None,
 ):
     output_format = output_format.upper()
     line_terminator = line_terminator if line_terminator is not None else os.linesep
 
     if split_window is None:
-        dataframe = _prepare_output_for_existing(output_file, dataframe, exists_action, quiet=quiet)
+        dataframe = _prepare_output_for_existing(
+            output_file,
+            dataframe,
+            exists_action,
+            update_record_numbers=update_record_numbers,
+            quiet=quiet,
+        )
         if dataframe is None:
             return output_file
         return _write_csi_file(
@@ -128,27 +141,39 @@ def write_csi_files(
         )
 
     dataframe = _ensure_datetime_index(dataframe).sort_index()
-    group_freq = _resolve_split_group_freq(split_window)
+    group_freq = _resolve_split_group_freq(split_window, quiet=quiet)
     os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
     chunk_tasks = []
     for chunk, start_ts, end_ts in _iter_split_chunks(
-        dataframe, group_freq, closed=closed, label=label
+        dataframe, group_freq, closed=closed, label=label, quiet=quiet
     ):
         outfile = _timestamped_output_path(
             output_file, start_ts.floor(group_freq), end_ts.ceil(group_freq)
         )
-        chunk_tasks.append((chunk, outfile))
+        chunk_tasks.append((chunk, outfile, columns))
 
     worker_count = _resolve_parallel_workers(len(chunk_tasks), max_workers=max_workers)
 
     def _write_split_chunk(task):
-        chunk, outfile = task
+        chunk, outfile, columns = task
         if exists_action == "skip" and os.path.exists(outfile):
             return outfile
         if exists_action == "merge" and os.path.exists(outfile):
-            chunk = _prepare_output_for_existing(outfile, chunk, exists_action, quiet=quiet)
+            chunk = _prepare_output_for_existing(
+                outfile,
+                chunk,
+                exists_action,
+                update_record_numbers=update_record_numbers,
+                quiet=quiet,
+            )
         return _write_csi_file(
-            outfile, chunk, output_format, meta=meta, line_terminator=line_terminator, quiet=quiet
+            outfile,
+            chunk,
+            output_format,
+            meta=meta,
+            line_terminator=line_terminator,
+            quiet=quiet,
+            columns=columns,
         )
 
     if not quiet:
@@ -157,9 +182,9 @@ def write_csi_files(
         return [_write_split_chunk(task) for task in chunk_tasks]
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        if tqdm is not None and not quiet:
+        if tqdm is None and not quiet:
             return list(executor.map(_write_split_chunk, chunk_tasks))
-        else:
+        elif tqdm is not None and not quiet:
             return list(
                 tqdm.tqdm(
                     executor.map(_write_split_chunk, chunk_tasks),
@@ -167,6 +192,8 @@ def write_csi_files(
                     disable=quiet,
                 )
             )
+        else:
+            return list(executor.map(_write_split_chunk, chunk_tasks))
 
 
 def write_csi_ascii(
@@ -182,6 +209,7 @@ def write_csi_ascii(
     meta=None,
     line_terminator=None,
     quiet=True,
+    columns=None,
 ):
     if filetype not in ["TOA5", "TOACI1", "CSV"]:
         raise ValueError("filetype must be TOA5, TOACI1, or CSV")
@@ -196,7 +224,11 @@ def write_csi_ascii(
     program = _resolve_meta_header_value(meta, 0, 5, program)
     table = _resolve_meta_header_value(meta, 0, 6, table)
 
-    raw_names = ["TIMESTAMP"] + list(export_df.columns)
+    if columns is not None:
+        raw_names = ["TIMESTAMP"] + [col for col in export_df.columns if col in columns]
+        export_df = export_df[raw_names[1:]]
+    else:
+        raw_names = ["TIMESTAMP"] + list(export_df.columns)
     names, units = zip(*[_split_name_and_unit(col) for col in raw_names], strict=False)
     header = _compose_ascii_header(
         filetype,
@@ -240,9 +272,19 @@ def write_csi_ascii(
 
 
 def write_csi_csixml(
-    outfile, dataframe, process="Smp", meta=None, line_terminator=None, quiet=True
+    outfile,
+    dataframe,
+    process="Smp",
+    columns=None,
+    meta=None,
+    line_terminator=None,
+    quiet=True,
 ):
     line_terminator = line_terminator if line_terminator is not None else os.linesep
+
+    if columns is not None:
+        raw_names = ["TIMESTAMP"] + [col for col in dataframe.columns if col in columns]
+        dataframe = dataframe[raw_names[1:]]
 
     def _xml_safe_text(value):
         if pd.isna(value):
@@ -255,7 +297,7 @@ def write_csi_csixml(
         numeric = pd.to_numeric(series.dropna(), errors="coerce")
         return "xsd:float" if numeric.notna().all() else "xsd:string"
 
-    export_df = _prepare_export_dataframe(dataframe)
+    export_df = _prepare_export_dataframe(dataframe, columns=columns)
     payload_cols = [c for c in export_df.columns if c != "RECORD (RN)"]
     split_names = [_split_name_and_unit(col) for col in payload_cols]
     process_values = _resolve_meta_process_values(meta, process, len(payload_cols))
@@ -321,9 +363,10 @@ def write_csi_tob1(
     table="table",
     meta=None,
     line_terminator=None,
+    columns=None,
     quiet=True,
 ):
-    export_df = _prepare_export_dataframe(dataframe).sort_index()
+    export_df = _prepare_export_dataframe(dataframe, columns=columns).sort_index()
     line_terminator = line_terminator if line_terminator is not None else os.linesep
     station = _resolve_meta_header_value(meta, 0, 1, station)
     logger = _resolve_meta_header_value(meta, 0, 2, logger)
@@ -386,8 +429,9 @@ def write_csi_tob3(
     meta=None,
     line_terminator=None,
     quiet=True,
+    columns=None,
 ):
-    export_df = _prepare_export_dataframe(dataframe).sort_index()
+    export_df = _prepare_export_dataframe(dataframe, columns=columns).sort_index()
     line_terminator = line_terminator if line_terminator is not None else os.linesep
 
     station = _resolve_meta_header_value(meta, 0, 1, station)
