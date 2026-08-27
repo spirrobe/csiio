@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
-## [0.3.8] - 2026-08-27
+## [0.4.0] - 2026-08-27
 
 ### Changed
 - Passing columns through both to reader and writer
